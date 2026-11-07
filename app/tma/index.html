@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Второй мозг · Медиа-каталог</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="./styles.css?v=2" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-row">
+      <div class="brand">
+        <span class="brand-icon">🧠</span>
+        <div>
+          <h1>Второй мозг</h1>
+          <p class="subtitle" id="totalCountLabel">Загрузка каталога...</p>
+        </div>
+      </div>
+      <button class="refresh-btn" id="refreshBtn" title="Обновить">↻</button>
+    </div>
+
+    <!-- Табы категорий (1 компактная строка) -->
+    <nav class="tabs" id="categoryTabs">
+      <button class="tab active" data-tab="">Все</button>
+      <button class="tab" data-tab="movies">🎬 Кино и сериалы</button>
+      <button class="tab" data-tab="books">📚 Книги</button>
+      <button class="tab" data-tab="video">▶️ YouTube</button>
+      <button class="tab" data-tab="article">📰 Статьи</button>
+      <button class="tab" data-tab="ideas">💡 Идеи и посты</button>
+    </nav>
+
+    <!-- Поиск + Раскрывающиеся списки Статуса и Сортировки в 1 строку -->
+    <div class="controls-row">
+      <div class="search-wrap">
+        <span class="search-icon">🔎</span>
+        <input type="search" id="searchInput" placeholder="Поиск по названию, автору, описанию..." />
+      </div>
+      <select id="statusFilterSelect" class="control-select" title="Фильтр по статусу">
+        <option value="all">Все статусы</option>
+        <option value="inbox">📥 Входящие</option>
+        <option value="planned">📌 В планах</option>
+        <option value="in_progress">▶️ В процессе</option>
+        <option value="done">✅ Готово</option>
+        <option value="dropped">🚫 Брошено</option>
+      </select>
+      <select id="sortSelect" class="control-select" title="Сортировка">
+        <option value="created">По дате ↓</option>
+        <option value="imdb">IMDb / Goodreads ↓</option>
+        <option value="kp">КП / FantLab ↓</option>
+        <option value="rt">Rotten Tomatoes ↓</option>
+        <option value="user">Моя оценка ↓</option>
+      </select>
+    </div>
+
+    <!-- Строго 1 строка популярных жанров/тегов по убыванию + раскрывающийся список остальных в конце -->
+    <div class="tags-single-line" id="tagBar"></div>
+  </header>
+
+  <main class="catalog-container">
+    <div id="catalogGrid" class="catalog-grid"></div>
+    <div id="emptyState" class="empty-state hidden">
+      <div class="empty-emoji">🗂</div>
+      <h3>Ничего не найдено</h3>
+      <p>Попробуйте сбросить фильтры или добавьте новую запись через бота в группе <b>Notes📎</b>.</p>
+    </div>
+  </main>
+
+  <script src="./app.js?v=2"></script>
+</body>
+</html>

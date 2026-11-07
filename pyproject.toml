@@ -1,0 +1,27 @@
+[project]
+name = "personal-db"
+version = "0.1.0"
+description = "Персональная система «Второй мозг» и Медиа-каталог (Telegram + Turso + TMA)"
+readme = "telegram_turso_tma.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "libsql-experimental>=0.0.55",
+    "groq>=0.11.0",
+    "selectolax>=0.3.21",
+    "trafilatura>=1.12.0",
+    "mcp>=1.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
