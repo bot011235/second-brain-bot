@@ -70,14 +70,18 @@ class BooksClient:
             "q": query,
             "maxResults": min(limit * 2, 10),
             "printType": "books",
+            "langRestrict": "ru",
             "key": self.api_key,
         }
         try:
             with httpx.Client(timeout=12.0, headers={"User-Agent": USER_AGENT}) as client:
                 resp = client.get(GOOGLE_BOOKS_URL, params=params)
-                if resp.status_code != 200:
-                    return []
-                items = resp.json().get("items") or []
+                items = (resp.json().get("items") or []) if resp.status_code == 200 else []
+                if not items:
+                    # Повтор без langRestrict для редких или англоязычных книг
+                    params.pop("langRestrict", None)
+                    resp = client.get(GOOGLE_BOOKS_URL, params=params)
+                    items = (resp.json().get("items") or []) if resp.status_code == 200 else []
         except Exception:
             return []
 

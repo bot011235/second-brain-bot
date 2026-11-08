@@ -43,6 +43,10 @@
 
 ## 3. Хронология изменений (Лог правок по всем чатам)
 
+### 2026-11-08 — Активация Google Books API + YouTube Data API v3 (`app/clients/books.py`, `.env`)
+- В Google Cloud проекте пользователя активирован официальный **Google Books API** (ключ `GOOGLE_BOOKS_API_KEY` и `YOUTUBE_API_KEY` синхронизированы в Render).
+- В `BooksClient.search_google_books` (`app/clients/books.py`) добавлен приоритет русскоязычных изданий (`langRestrict="ru"`) с автоматическим фолбэком на все языки, если русское издание не найдено.
+
 ### 2026-11-08 — Защита Render от засыпания (Keep-Alive 24/7) и единый деплой из любого чата (`scripts/push_and_deploy.py`)
 - **Автодеплой для всех чатов (`scripts/push_and_deploy.py`, `.env`)**:
   - В `.env` сохранены `GITHUB_TOKEN`, `RENDER_API_KEY`, `RENDER_SERVICE_ID`, чтобы из любого чата проекта можно было одной командой `python scripts/push_and_deploy.py` отправить коммиты в GitHub, синхронизировать переменные окружения и запустить деплой на Render без повторного запроса токенов у пользователя.
