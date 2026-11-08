@@ -62,18 +62,17 @@ def render_disambiguation_html(query: str, candidates: list[dict[str, Any]]) -> 
     for idx, c in enumerate(candidates[:3]):
         emoji = num_emojis[idx]
         c_cat = c.get("category")
-        cat_label = "Книга" if c_cat == "book" else ("Сериал" if c_cat == "series" else "Фильм")
+        cat_icon = "📚" if c_cat == "book" else ("📺" if c_cat == "series" else "🎬")
         title_ru = html.escape(c.get("title_ru") or "Без названия")
         title_orig = html.escape(c.get("title_orig") or "")
         year = c.get("release_year")
-        line = f"{emoji} <b>{title_ru}</b>"
+        line = f"{emoji} {cat_icon} <b>{title_ru}</b>"
         if title_orig and title_orig.lower() != title_ru.lower():
             line += f" / <i>{title_orig}</i>"
-        if c.get("creator"):
-            line += f" — {html.escape(str(c['creator']))}"
         if year:
             line += f" ({year})"
-        line += f" · {cat_label}"
+        if c.get("creator"):
+            line += f" · 👤 {html.escape(str(c['creator']))}"
         if c.get("summary"):
             short_desc = html.escape(str(c["summary"]))[:120]
             line += f"\n   <i>{short_desc}</i>"
@@ -96,7 +95,7 @@ def render_card_html(item: dict[str, Any], max_len: int = 1024) -> str:
             return render_disambiguation_html(item.get("raw_input") or item.get("title_ru") or "", candidates)
 
     cat = item.get("category", "idea")
-    emoji, cat_label = CATEGORY_META.get(cat, ("📌", cat))
+    emoji, _ = CATEGORY_META.get(cat, ("📌", cat))
     title_ru = html.escape(item.get("title_ru") or "Без названия")
     title_orig = html.escape(item.get("title_orig") or "")
     year = item.get("release_year")
@@ -111,11 +110,8 @@ def render_card_html(item: dict[str, Any], max_len: int = 1024) -> str:
 
     lines = [header]
 
-    status_label = format_status_label(cat, item.get("status", "inbox"))
-    meta_parts = [f"<b>Тип:</b> {cat_label}", f"<b>Статус:</b> {status_label}"]
     if item.get("creator"):
-        meta_parts.append(f"<b>Автор:</b> {html.escape(str(item['creator']))}")
-    lines.append(" · ".join(meta_parts))
+        lines.append(f"👤 {html.escape(str(item['creator']))}")
 
     raw_meta = item.get("meta")
     parsed_meta: dict[str, Any] = {}
@@ -188,7 +184,7 @@ def render_card_html(item: dict[str, Any], max_len: int = 1024) -> str:
 
     genres = item.get("genres") or []
     if genres:
-        lines.append("🎭 " + ", ".join(html.escape(g) for g in genres))
+        lines.append("🎭 " + " · ".join(f"<code>{html.escape(g)}</code>" for g in genres))
 
     summary = (item.get("summary") or "").strip()
     if summary:
