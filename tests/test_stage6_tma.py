@@ -253,6 +253,29 @@ class TestStage6TMA(unittest.TestCase):
                 coro2.send(None)
             self.assertEqual(cm_wh2.exception.status_code, 403)
 
+            # 8. Проверка формы входа /api/login для менеджеров паролей:
+            from fastapi import Response
+            from app.main import LoginPayload, api_login
+
+            settings.web_admin_username = "admin"
+            settings.web_admin_password = "test_password_456"
+
+            resp = Response()
+            login_res = api_login(LoginPayload(username="admin", password="test_password_456"), resp)
+            self.assertEqual(login_res["status"], "ok")
+            self.assertEqual(login_res["token"], "test_password_456")
+            self.assertIn("sb_access_key", resp.headers.get("set-cookie", ""))
+
+            # Неверный пароль -> 401
+            with self.assertRaises(HTTPException) as cm_pwd:
+                api_login(LoginPayload(username="admin", password="wrong_password"), resp)
+            self.assertEqual(cm_pwd.exception.status_code, 401)
+
+            # Неверный логин -> 401
+            with self.assertRaises(HTTPException) as cm_usr:
+                api_login(LoginPayload(username="intruder", password="test_password_456"), resp)
+            self.assertEqual(cm_usr.exception.status_code, 401)
+
         finally:
             settings.telegram_bot_token = old_token
             settings.allowed_tg_user_id = old_user_id

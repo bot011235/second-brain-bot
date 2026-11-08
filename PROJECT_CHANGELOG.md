@@ -43,6 +43,18 @@
 
 ## 3. Хронология изменений (Лог правок по всем чатам)
 
+### 2026-11-08 — Форма логина и пароля с автосохранением в менеджеры паролей (`app/main.py`, `app/config.py`, `app/tma/`, `scripts/push_and_deploy.py`, `tests/test_stage6_tma.py`)
+- **Форма входа для менеджеров паролей (Google Passwords, Apple Keychain, Bitwarden) (`app/tma/index.html`, `app/tma/app.js`)**:
+  - В модальное окно авторизации добавлена стандартная семантическая HTML-форма (`method="post" action="/api/login"`) с полями логина (`autocomplete="username"`, значение по умолчанию `admin`) и пароля (`autocomplete="current-password"`).
+  - При отправке формы браузер и системные менеджеры паролей (Google Chrome, Safari, Edge) перехватывают успешный ответ и предлагают сохранить связку `Логин + Пароль` в одно нажатие.
+- **Эндпоинт `/api/login` и cookie-авторизация (`app/main.py`, `app/config.py`)**:
+  - Добавлен роут `POST /api/login` (`LoginPayload`), сверяющий логин и пароль через `hmac.compare_digest`.
+  - При успешном входе сервер устанавливает защищённую cookie `sb_access_key` на 1 год (`SameSite=Lax`, `Secure=True`), благодаря чему на телефоне и компьютере вход сохраняется автоматически.
+  - В `app/config.py` добавлены настройки `web_admin_username` (по умолчанию `admin`) и `web_admin_password` (с автоматическим фолбэком на мастер-ключ `telegram_webhook_secret`).
+- **Синхронизация деплоя и тесты (`scripts/push_and_deploy.py`, `tests/test_stage6_tma.py`)**:
+  - В `push_and_deploy.py` добавлены переменные `WEB_ADMIN_USERNAME` и `WEB_ADMIN_PASSWORD`.
+  - Добавлены модульные тесты для `/api/login`: успешная авторизация с генерацией cookie (200), неверный пароль (401), неверный логин (401).
+
 ### 2026-11-08 — Устранение уязвимостей безопасности: закрытие публичного доступа к витрине и защита Webhook (`app/main.py`, `app/config.py`, `app/tma/`, `scripts/push_and_deploy.py`, `tests/test_stage6_tma.py`)
 - **Закрытие публичного доступа в `app/main.py` (`require_tma_auth`)**:
   - Убран анонимный обход авторизации для браузера на всех роутах каталога и оригиналов (`GET /api/items`, `GET /api/tags`, `GET /api/originals`, `PATCH /api/items/{id}`, `DELETE ...`).

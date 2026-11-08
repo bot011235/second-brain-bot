@@ -77,15 +77,37 @@
     <div class="auth-modal-card">
       <div class="auth-icon">🔒</div>
       <h2>Личный доступ</h2>
-      <p class="auth-desc" id="authDescText">База знаний защищена. Для входа введите секретный ключ доступа:</p>
-      <form id="authForm" class="auth-form">
-        <input type="password" id="authKeyInput" class="auth-input" placeholder="Введите ключ доступа..." autocomplete="current-password" required />
-        <button type="submit" class="auth-submit-btn">Войти</button>
+      <p class="auth-desc" id="authDescText">База знаний защищена. Войдите, чтобы менеджер паролей сохранил доступ:</p>
+      <form id="authForm" class="auth-form" method="post" action="/api/login">
+        <div class="auth-field-group">
+          <input
+            type="text"
+            id="authUsernameInput"
+            name="username"
+            class="auth-input"
+            placeholder="Логин"
+            autocomplete="username"
+            required
+            value="admin"
+          />
+        </div>
+        <div class="auth-field-group">
+          <input
+            type="password"
+            id="authPasswordInput"
+            name="password"
+            class="auth-input"
+            placeholder="Пароль / Ключ доступа"
+            autocomplete="current-password"
+            required
+          />
+        </div>
+        <button type="submit" class="auth-submit-btn" id="authSubmitBtn">Войти</button>
       </form>
-      <div id="authErrorMsg" class="auth-error-msg hidden">Неверный ключ доступа. Попробуйте снова.</div>
+      <div id="authErrorMsg" class="auth-error-msg hidden">Неверный логин или пароль. Попробуйте снова.</div>
     </div>
   </div>
 
-  <script src="./app.js?v=6"></script>
+  <script src="./app.js?v=7"></script>
 </body>
 </html>

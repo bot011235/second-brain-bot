@@ -66,7 +66,8 @@
 
   const authModal = document.getElementById("authModal");
   const authForm = document.getElementById("authForm");
-  const authKeyInput = document.getElementById("authKeyInput");
+  const authUsernameInput = document.getElementById("authUsernameInput");
+  const authPasswordInput = document.getElementById("authPasswordInput");
   const authErrorMsg = document.getElementById("authErrorMsg");
   const authDescText = document.getElementById("authDescText");
 
@@ -80,9 +81,9 @@
       if (authForm) authForm.classList.add("hidden");
     } else {
       if (authForm) authForm.classList.remove("hidden");
-      if (authKeyInput) {
-        authKeyInput.value = "";
-        authKeyInput.focus();
+      if (authPasswordInput) {
+        authPasswordInput.value = "";
+        authPasswordInput.focus();
       }
     }
   }
@@ -93,13 +94,40 @@
   }
 
   if (authForm) {
-    authForm.addEventListener("submit", (e) => {
+    authForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const entered = (authKeyInput ? authKeyInput.value : "").trim();
-      if (!entered) return;
-      localStorage.setItem("sb_access_key", entered);
-      hideAuthModal();
-      refreshCurrentView();
+      const username = (authUsernameInput ? authUsernameInput.value : "admin").trim();
+      const password = (authPasswordInput ? authPasswordInput.value : "").trim();
+      if (!password) return;
+
+      if (authErrorMsg) authErrorMsg.classList.add("hidden");
+
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+
+        if (!res.ok) {
+          if (authErrorMsg) {
+            authErrorMsg.textContent = "Неверный логин или пароль. Попробуйте снова.";
+            authErrorMsg.classList.remove("hidden");
+          }
+          return;
+        }
+
+        const data = await res.json();
+        const token = data.token || password;
+        localStorage.setItem("sb_access_key", token);
+        hideAuthModal();
+        refreshCurrentView();
+      } catch (err) {
+        if (authErrorMsg) {
+          authErrorMsg.textContent = "Ошибка сети или сервера. Попробуйте снова.";
+          authErrorMsg.classList.remove("hidden");
+        }
+      }
     });
   }
 

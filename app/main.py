@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -97,9 +97,17 @@ def require_tma_auth(
                 raise HTTPException(status_code=403, detail="Forbidden: unauthorized or invalid Telegram user")
             return user
 
-    # Веб-доступ владельца через секретный ключ
-    expected_key = (settings.web_access_key or settings.telegram_webhook_secret or "").strip()
-    if expected_key:
+    # Веб-доступ владельца через секретный ключ или пароль администратора
+    valid_keys = [
+        k.strip()
+        for k in [
+            settings.web_admin_password,
+            settings.web_access_key,
+            settings.telegram_webhook_secret,
+        ]
+        if k and k.strip()
+    ]
+    if valid_keys:
         provided_key = (
             request.headers.get("X-Access-Key")
             or request.query_params.get("key")
@@ -110,8 +118,10 @@ def require_tma_auth(
         if not provided_key and authorization and authorization.lower().startswith("bearer "):
             provided_key = authorization[7:].strip()
 
-        if provided_key and hmac.compare_digest(provided_key, expected_key):
-            return {"id": settings.allowed_tg_user_id or 0, "web_key": True}
+        if provided_key:
+            for vk in valid_keys:
+                if hmac.compare_digest(provided_key, vk):
+                    return {"id": settings.allowed_tg_user_id or 0, "web_key": True}
 
     raise HTTPException(
         status_code=401,
@@ -119,9 +129,63 @@ def require_tma_auth(
     )
 
 
+class LoginPayload(BaseModel):
+    username: str
+    password: str
+
+
 class PatchItemPayload(BaseModel):
     status: str | None = None
     user_rating: int | None = None
+
+
+@app.post("/api/login")
+def api_login(
+    payload: LoginPayload,
+    response: Response,
+) -> dict[str, Any]:
+    """Проверка логина и пароля с установкой cookie для браузерных менеджеров паролей (Google Passwords, Apple Keychain)."""
+    expected_username = (settings.web_admin_username or "admin").strip().lower()
+    input_username = payload.username.strip().lower()
+    if input_username != expected_username:
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+
+    valid_passwords = [
+        p.strip()
+        for p in [
+            settings.web_admin_password,
+            settings.web_access_key,
+            settings.telegram_webhook_secret,
+        ]
+        if p and p.strip()
+    ]
+    if not valid_passwords:
+        raise HTTPException(status_code=500, detail="Server auth not configured")
+
+    input_password = payload.password.strip()
+    matched = False
+    for vp in valid_passwords:
+        if hmac.compare_digest(input_password, vp):
+            matched = True
+            break
+
+    if not matched:
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+
+    # Успешная аутентификация: выставляем cookie sb_access_key на 1 год
+    response.set_cookie(
+        key="sb_access_key",
+        value=input_password,
+        max_age=365 * 24 * 3600,
+        httponly=False,
+        samesite="lax",
+        secure=True,
+    )
+    return {
+        "status": "ok",
+        "username": payload.username.strip(),
+        "token": input_password,
+    }
 
 
 @app.get("/healthz")
