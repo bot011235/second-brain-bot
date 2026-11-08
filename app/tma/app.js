@@ -64,12 +64,39 @@
     return headers;
   }
 
+  const isTgWebApp = Boolean(tg && tg.initData);
+
   const authModal = document.getElementById("authModal");
   const authForm = document.getElementById("authForm");
   const authUsernameInput = document.getElementById("authUsernameInput");
   const authPasswordInput = document.getElementById("authPasswordInput");
   const authErrorMsg = document.getElementById("authErrorMsg");
   const authDescText = document.getElementById("authDescText");
+  const logoutBtn = document.getElementById("logoutBtn");
+
+  if (logoutBtn) {
+    if (isTgWebApp) {
+      logoutBtn.classList.add("hidden");
+    } else {
+      logoutBtn.addEventListener("click", async () => {
+        localStorage.removeItem("sb_access_key");
+        try {
+          await fetch("/api/logout", { method: "POST" });
+        } catch {}
+        state.items = [];
+        state.originals = [];
+        renderCatalog();
+        showAuthModal(false);
+      });
+    }
+  }
+
+  // Если открыто в обычном браузере и ключ ещё не сохранён — открываем окно входа мгновенно
+  if (!isTgWebApp && !getAccessKey()) {
+    setTimeout(() => {
+      showAuthModal(false);
+    }, 10);
+  }
 
   function showAuthModal(isForbiddenTelegram = false) {
     if (!authModal) return;
@@ -83,7 +110,7 @@
       if (authForm) authForm.classList.remove("hidden");
       if (authPasswordInput) {
         authPasswordInput.value = "";
-        authPasswordInput.focus();
+        setTimeout(() => authPasswordInput.focus(), 50);
       }
     }
   }

@@ -80,6 +80,25 @@ body {
   background: #f1f5f9;
 }
 
+.logout-btn {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  font-size: 16px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.logout-btn:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
 .header-right {
   display: flex;
   align-items: center;

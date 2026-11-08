@@ -174,6 +174,12 @@ def api_login(
     }
 
 
+@app.post("/api/logout")
+def api_logout(response: Response) -> dict[str, str]:
+    response.delete_cookie(key="sb_access_key", path="/")
+    return {"status": "logged_out"}
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
