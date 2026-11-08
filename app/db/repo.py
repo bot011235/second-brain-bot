@@ -441,41 +441,11 @@ def set_item_tg_message_id(conn: Any, item_id: int, tg_message_id: int) -> None:
 
 
 def delete_item(conn: Any, item_id: int) -> bool:
-    item = get_item(conn, item_id)
+    """Удаляет карточку только из каталога (items и items_fts), не затрагивая архив оригиналов."""
     conn.execute("DELETE FROM items_fts WHERE rowid = ?", (item_id,))
     cur = conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
-    deleted = cur.rowcount > 0
-    if deleted and item:
-        urls: set[str] = set()
-        if item.get("canonical_url"):
-            urls.add(str(item["canonical_url"]))
-        for s in item.get("sources") or []:
-            if s.get("source_url"):
-                urls.add(str(s["source_url"]))
-        for u in urls:
-            rem = conn.execute(
-                "SELECT 1 FROM items WHERE canonical_url = ? "
-                "UNION SELECT 1 FROM item_sources WHERE source_url = ? LIMIT 1",
-                (u, u),
-            ).fetchone()
-            if not rem:
-                try:
-                    conn.execute("DELETE FROM original_messages WHERE source_url = ?", (u,))
-                except Exception:
-                    pass
-        raw_in = (item.get("raw_input") or "").strip()
-        if raw_in:
-            rem_raw = conn.execute("SELECT 1 FROM items WHERE raw_input = ? LIMIT 1", (raw_in,)).fetchone()
-            if not rem_raw:
-                try:
-                    conn.execute(
-                        "DELETE FROM original_messages WHERE raw_text = ? AND source_url IS NULL",
-                        (raw_in,),
-                    )
-                except Exception:
-                    pass
     conn.commit()
-    return deleted
+    return cur.rowcount > 0
 
 
 def find_existing_by_url(conn: Any, canonical_url: str) -> dict[str, Any] | None:

@@ -113,6 +113,25 @@ class TestStage6TMA(unittest.TestCase):
         self.assertEqual(len(orig_search), 1)
         self.assertEqual(orig_search[0]["topic_slug"], "movies")
 
+        # Удаление из Каталога НЕ удаляет оригинал из архива оригиналов
+        item_standalone = repo.create_item(
+            conn,
+            category="book",
+            title_ru="Солярис",
+            source_url="https://example.com/solaris",
+        )
+        orig_standalone = repo.create_original_message(
+            conn,
+            topic_slug="books",
+            raw_text="Солярис Станислав Лем",
+            source_url="https://example.com/solaris",
+        )
+        self.assertTrue(repo.delete_item(conn, item_standalone["id"]))
+        self.assertIsNone(repo.get_item(conn, item_standalone["id"]))
+        # Оригинал остаётся в сохранности:
+        remaining_orig = repo.list_original_messages(conn, tab="books")
+        self.assertTrue(any(o["id"] == orig_standalone["id"] for o in remaining_orig))
+
         # Каскадное удаление из Оригиналов удаляет и привязанный пост из Каталога
         linked_item = repo.create_item(
             conn,
