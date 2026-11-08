@@ -98,7 +98,7 @@ def build_item_keyboard(item: dict[str, Any]) -> dict[str, Any]:
     sources = item.get("sources") or []
     for idx, src in enumerate(sources[:2], start=1):
         if src.get("source_url"):
-            label = "🔗 Источник" if len(sources) == 1 else f"🔗 Источник {idx}"
+            label = _format_source_label(str(src["source_url"]), idx if len(sources) > 1 else None)
             url_row.append({"text": label, "url": str(src["source_url"])})
 
     status_buttons = [

@@ -149,6 +149,79 @@
     return "";
   }
 
+  const SVC_ICONS = {
+    threads: `<svg class="svc-svg" viewBox="0 0 192 192" width="14" height="14" fill="currentColor"><path d="M141.537 88.9883C140.71 88.5919 139.87 88.2104 139.019 87.8451C137.537 60.5382 122.616 44.905 97.5619 44.745C97.4184 44.7443 97.2748 44.7443 97.1313 44.745C75.8062 44.745 59.4975 58.115 54.4363 79.475C49.375 100.835 56.685 125.145 74.0537 137.955C89.1762 149.11 110.126 150.315 125.753 141.455L120.436 129.565C108.575 136.295 92.4287 135.215 80.6975 126.565C67.6663 116.955 62.1587 97.975 66.1762 81.015C70.1937 64.055 82.5275 53.485 97.2287 53.485C115.111 53.605 125.961 65.615 127.166 88.295C124.717 89.475 122.137 90.725 119.431 92.055C102.774 100.225 84.7212 109.085 86.8537 127.835C87.9725 137.665 96.0825 145.415 106.004 145.415C116.541 145.415 126.136 138.445 131.789 129.745C136.529 138.515 143.725 143.265 152.923 143.265C166.456 143.265 177.346 132.375 177.346 118.842C177.346 95.845 159.957 88.025 141.537 88.9883ZM120.916 117.815C117.476 123.965 111.451 127.675 104.931 127.675C99.8825 127.675 95.8362 124.085 95.3425 119.745C94.2787 110.375 104.382 104.935 118.736 97.895C120.479 97.039 122.203 96.1983 123.904 95.3725C124.496 103.585 123.496 113.205 120.916 117.815Z"/></svg>`,
+    youtube: `<svg class="svc-svg" viewBox="0 0 24 24" width="15" height="15" fill="#ef4444"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`,
+    instagram: `<svg class="svc-svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#e1306c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>`,
+    telegram: `<svg class="svc-svg" viewBox="0 0 24 24" width="14" height="14" fill="#0284c7"><path d="m20.665 3.717-17.73 6.837c-1.21.486-1.203 1.161-.222 1.462l4.552 1.42 10.532-6.645c.498-.303.953-.14.579.192l-8.533 7.701h-.002l-.313 4.673c.46 0 .663-.211.921-.46l2.211-2.15 4.599 3.397c.848.467 1.457.227 1.668-.785l3.019-14.228c.309-1.239-.473-1.8-1.282-1.414z"/></svg>`,
+    x: `<svg class="svc-svg" viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`,
+    reddit: `<svg class="svc-svg" viewBox="0 0 24 24" width="14" height="14" fill="#ea580c"><circle cx="12" cy="12" r="10"/><path fill="#fff" d="M17 11.5a1.5 1.5 0 0 0-2.5-1.1c-.8-.5-1.8-.8-3-.9l.5-2.5 2 .4a1 1 0 1 0 .2-.7l-2.4-.5a.5.5 0 0 0-.6.4l-.7 3.2c-1.1.1-2.2.4-3 .9A1.5 1.5 0 0 0 5 11.5c0 .6.3 1.1.8 1.3 0 .2 0 .4 0 .7 0 2.2 2.7 4 6 4s6-1.8 6-4c0-.3 0-.5 0-.7.5-.2.8-.7.8-1.3zM9 11.5a1 1 0 1 1 2 0 1 1 0 0 1-2 0zm5.8 3.3c-.6.6-1.7.7-2.8.7s-2.2-.1-2.8-.7a.3.3 0 0 1 .4-.4c.5.5 1.4.6 2.4.6s1.9-.1 2.4-.6a.3.3 0 0 1 .4.4zm.2-2.3a1 1 0 1 1 0-2 1 1 0 0 1 0 2z"/></svg>`,
+    github: `<svg class="svc-svg" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>`,
+    vk: `<svg class="svc-svg" viewBox="0 0 24 24" width="14" height="14" fill="#0077ff"><path d="M13.162 18.994c.609 0 .858-.406.851-.915-.072-2.146.953-2.941 1.97-1.928 1.157 1.157 1.796 2.843 3.328 2.843h2.689c.744 0 1.121-.373.905-1.107-.433-1.464-2.825-3.567-2.92-3.957-.24-.984.14-1.434.72-2.208 1.834-2.457 2.658-3.948 2.39-4.642-.236-.61-1.343-.45-2.003-.45l-2.833.018c-.482 0-.847.228-1.036.726-.81 2.128-2.185 4.195-2.738 4.417-.433.174-.633.08-.827-.123-.526-.554-.395-2.08-.395-3.195 0-2.433.376-3.486-.73-3.751-.368-.088-1.018-.145-1.782-.145-2.028 0-3.468.172-4.148.973-.243.287-.038.384.346.435.918.12 1.25.753 1.298 2.213.065 1.986-.34 2.457-.79 2.457-.367 0-1.272-.942-1.99-2.585-.36-.826-.745-1.75-.745-1.75s-.08-.198-.225-.306c-.18-.135-.434-.177-.434-.177l-2.695.018c-.41 0-.573.18-.573.398 0 .408.528 2.43 2.474 5.093 1.95 2.667 4.673 4.116 7.151 4.116h1.2z"/></svg>`,
+    tiktok: `<svg class="svc-svg" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M19.589 6.686a4.793 4.793 0 0 1-3.77-4.245V2h-3.445v13.672a2.896 2.896 0 0 1-2.883 2.87 2.896 2.896 0 0 1-2.884-2.87 2.896 2.896 0 0 1 2.884-2.87c.29 0 .57.042.836.12v-3.52a6.376 6.376 0 0 0-.836-.056C5.932 9.436 3 12.38 3 16.012c0 3.633 2.932 6.578 6.547 6.578 3.616 0 6.548-2.945 6.548-6.578V9.167a8.21 8.21 0 0 0 4.887 1.583v-3.44a4.83 4.83 0 0 1-1.393-.624z"/></svg>`,
+    globe: `<svg class="svc-svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`,
+  };
+
+  function buildSourceBadgeHtml(url, index = null) {
+    if (!url) return "";
+    let domain = "";
+    try {
+      const u = new URL(url);
+      domain = u.hostname.toLowerCase().replace(/^www\./, "");
+    } catch {
+      domain = "";
+    }
+
+    let iconHtml = SVC_ICONS.globe;
+    let label = domain || "Ссылка";
+
+    if (domain.includes("threads.net") || domain.includes("threads.com")) {
+      iconHtml = SVC_ICONS.threads;
+      label = "Threads";
+    } else if (domain.includes("youtube.com") || domain.includes("youtu.be")) {
+      iconHtml = SVC_ICONS.youtube;
+      label = "YouTube";
+    } else if (domain.includes("instagram.com") || domain.includes("instagr.am")) {
+      iconHtml = SVC_ICONS.instagram;
+      label = "Instagram";
+    } else if (domain.includes("t.me") || domain.includes("telegram.me") || domain.includes("telegram.org")) {
+      iconHtml = SVC_ICONS.telegram;
+      label = "Telegram";
+    } else if (domain.includes("twitter.com") || domain.includes("x.com")) {
+      iconHtml = SVC_ICONS.x;
+      label = "X";
+    } else if (domain.includes("reddit.com") || domain.includes("redd.it")) {
+      iconHtml = SVC_ICONS.reddit;
+      label = "Reddit";
+    } else if (domain.includes("github.com")) {
+      iconHtml = SVC_ICONS.github;
+      label = "GitHub";
+    } else if (domain.includes("vk.com") || domain.includes("vk.ru")) {
+      iconHtml = SVC_ICONS.vk;
+      label = "VK";
+    } else if (domain.includes("tiktok.com")) {
+      iconHtml = SVC_ICONS.tiktok;
+      label = "TikTok";
+    } else if (domain.includes("habr.com")) {
+      iconHtml = `<span style="color:#0284c7;font-weight:800;font-size:11px;">H</span>`;
+      label = "Habr";
+    } else if (domain.includes("medium.com")) {
+      iconHtml = `<span style="font-weight:800;font-size:11px;">M</span>`;
+      label = "Medium";
+    } else if (domain.includes("wikipedia.org")) {
+      iconHtml = SVC_ICONS.globe;
+      label = "Википедия";
+    }
+
+    if (index != null) {
+      label += ` ${index}`;
+    }
+
+    const safeUrl = escapeHtml(url);
+    const safeLabel = escapeHtml(label);
+    return `<a class="rating-badge source-badge" href="${safeUrl}" target="_blank" rel="noopener noreferrer" title="${safeLabel}: ${safeUrl}">${iconHtml}<span>${safeLabel}</span></a>`;
+  }
+
   function buildRatingsHtml(item) {
     const meta = parseMeta(item.meta);
     const badges = [];
@@ -206,12 +279,17 @@
     }
 
     const sources = item.sources || [];
+    const seenUrls = new Set();
     sources.forEach((s, idx) => {
-      if (s.source_url) {
-        const lbl = sources.length === 1 ? "🔗 Источник" : `🔗 Источник ${idx + 1}`;
-        badges.push(`<a class="rating-badge" href="${s.source_url}" target="_blank">${lbl}</a>`);
+      if (s.source_url && !seenUrls.has(s.source_url)) {
+        seenUrls.add(s.source_url);
+        badges.push(buildSourceBadgeHtml(s.source_url, sources.length > 1 ? idx + 1 : null));
       }
     });
+    if (item.canonical_url && !seenUrls.has(item.canonical_url)) {
+      seenUrls.add(item.canonical_url);
+      badges.push(buildSourceBadgeHtml(item.canonical_url, null));
+    }
 
     return badges.join("");
   }
@@ -400,7 +478,7 @@
         const dateStr = (orig.created_at || "").slice(0, 16).replace("T", " ");
         const authorHtml = orig.author ? `<span class="orig-author">${escapeHtml(orig.author)}</span>` : "";
         const sourceBtnHtml = orig.source_url
-          ? `<a class="rating-badge" href="${escapeHtml(orig.source_url)}" target="_blank">🔗 Открыть ссылку</a>`
+          ? buildSourceBadgeHtml(orig.source_url, null)
           : "";
 
         const rawTrim = (orig.raw_text || "").trim();
