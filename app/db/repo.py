@@ -441,10 +441,41 @@ def set_item_tg_message_id(conn: Any, item_id: int, tg_message_id: int) -> None:
 
 
 def delete_item(conn: Any, item_id: int) -> bool:
+    item = get_item(conn, item_id)
     conn.execute("DELETE FROM items_fts WHERE rowid = ?", (item_id,))
     cur = conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+    deleted = cur.rowcount > 0
+    if deleted and item:
+        urls: set[str] = set()
+        if item.get("canonical_url"):
+            urls.add(str(item["canonical_url"]))
+        for s in item.get("sources") or []:
+            if s.get("source_url"):
+                urls.add(str(s["source_url"]))
+        for u in urls:
+            rem = conn.execute(
+                "SELECT 1 FROM items WHERE canonical_url = ? "
+                "UNION SELECT 1 FROM item_sources WHERE source_url = ? LIMIT 1",
+                (u, u),
+            ).fetchone()
+            if not rem:
+                try:
+                    conn.execute("DELETE FROM original_messages WHERE source_url = ?", (u,))
+                except Exception:
+                    pass
+        raw_in = (item.get("raw_input") or "").strip()
+        if raw_in:
+            rem_raw = conn.execute("SELECT 1 FROM items WHERE raw_input = ? LIMIT 1", (raw_in,)).fetchone()
+            if not rem_raw:
+                try:
+                    conn.execute(
+                        "DELETE FROM original_messages WHERE raw_text = ? AND source_url IS NULL",
+                        (raw_in,),
+                    )
+                except Exception:
+                    pass
     conn.commit()
-    return cur.rowcount > 0
+    return deleted
 
 
 def find_existing_by_url(conn: Any, canonical_url: str) -> dict[str, Any] | None:
@@ -679,8 +710,56 @@ def list_original_messages(
     ]
 
 
-def delete_original_message(conn: Any, orig_id: int) -> bool:
-    """Удаляет запись из архива оригинальных сообщений."""
-    cur = conn.execute("DELETE FROM original_messages WHERE id = ?", (orig_id,))
+def delete_original_message(conn: Any, orig_id: int) -> dict[str, Any] | None:
+    """Удаляет запись из архива оригинальных сообщений и все связанные с ней посты из каталога."""
+    row = conn.execute(
+        """
+        SELECT id, topic_slug, tg_topic_id, tg_message_id, raw_text, source_url
+        FROM original_messages WHERE id = ?
+        """,
+        (orig_id,),
+    ).fetchone()
+    if not row:
+        return None
+
+    orig_tg_msg_id = row[3]
+    raw_text = (row[4] or "").strip()
+    source_url = (row[5] or "").strip() or None
+
+    matched_ids: set[int] = set()
+    if source_url:
+        for r in conn.execute("SELECT id FROM items WHERE canonical_url = ?", (source_url,)).fetchall():
+            matched_ids.add(int(r[0]))
+        for r in conn.execute("SELECT item_id FROM item_sources WHERE source_url = ?", (source_url,)).fetchall():
+            matched_ids.add(int(r[0]))
+        if raw_text and raw_text != source_url:
+            for r in conn.execute("SELECT id FROM items WHERE canonical_url = ?", (raw_text,)).fetchall():
+                matched_ids.add(int(r[0]))
+            for r in conn.execute("SELECT item_id FROM item_sources WHERE source_url = ?", (raw_text,)).fetchall():
+                matched_ids.add(int(r[0]))
+
+    if raw_text:
+        for r in conn.execute("SELECT id FROM items WHERE raw_input = ?", (raw_text,)).fetchall():
+            matched_ids.add(int(r[0]))
+        for r in conn.execute("SELECT item_id FROM item_sources WHERE raw_text = ?", (raw_text,)).fetchall():
+            matched_ids.add(int(r[0]))
+
+    if orig_tg_msg_id:
+        for r in conn.execute("SELECT id FROM items WHERE tg_message_id = ?", (orig_tg_msg_id,)).fetchall():
+            matched_ids.add(int(r[0]))
+
+    deleted_items: list[dict[str, Any]] = []
+    for item_id in matched_ids:
+        it = get_item(conn, item_id)
+        if it:
+            deleted_items.append(it)
+            conn.execute("DELETE FROM items_fts WHERE rowid = ?", (item_id,))
+            conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+
+    conn.execute("DELETE FROM original_messages WHERE id = ?", (orig_id,))
     conn.commit()
-    return cur.rowcount > 0
+    return {
+        "id": orig_id,
+        "tg_message_id": orig_tg_msg_id,
+        "deleted_items": deleted_items,
+    }

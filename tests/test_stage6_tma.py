@@ -113,6 +113,133 @@ class TestStage6TMA(unittest.TestCase):
         self.assertEqual(len(orig_search), 1)
         self.assertEqual(orig_search[0]["topic_slug"], "movies")
 
+        # Каскадное удаление из Оригиналов удаляет и привязанный пост из Каталога
+        linked_item = repo.create_item(
+            conn,
+            category="series",
+            title_ru="Час дьявола",
+            source_url="https://www.threads.com/@morozova_katie/post/DfaRARGCNeh",
+            source_type="threads",
+            tg_message_id=777,
+        )
+        del_res = repo.delete_original_message(conn, orig_movies[0]["id"])
+        self.assertIsNotNone(del_res)
+        assert del_res is not None
+        self.assertEqual([it["id"] for it in del_res["deleted_items"]], [linked_item["id"]])
+        self.assertIsNone(repo.get_item(conn, linked_item["id"]))
+        self.assertEqual(len(repo.list_original_messages(conn, tab="movies")), 0)
+
+    def test_require_tma_auth_and_api_security(self) -> None:
+        from fastapi import HTTPException
+        from starlette.requests import Request
+        from app.config import settings
+        from app.main import require_tma_auth
+
+        # Имитируем настройки боевого сервера
+        old_token = settings.telegram_bot_token
+        old_user_id = settings.allowed_tg_user_id
+        old_secret = settings.telegram_webhook_secret
+        old_web_key = settings.web_access_key
+
+        settings.telegram_bot_token = "123456:BOT_SECRET"
+        settings.allowed_tg_user_id = 349407845
+        settings.telegram_webhook_secret = "test_secret_key_123"
+        settings.web_access_key = ""
+
+        try:
+            # 1. Запрос из браузера без ключа -> 401 Unauthorized
+            scope_anon = {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/items",
+                "query_string": b"",
+                "headers": [],
+                "client": ("198.51.100.1", 54321),
+            }
+            req_anon = Request(scope_anon)
+            with self.assertRaises(HTTPException) as cm:
+                require_tma_auth(req_anon, authorization=None)
+            self.assertEqual(cm.exception.status_code, 401)
+
+            # 2. Запрос из браузера с неверным ключом -> 401 Unauthorized
+            scope_wrong = {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/items",
+                "query_string": b"",
+                "headers": [(b"x-access-key", b"wrong_secret")],
+                "client": ("198.51.100.1", 54321),
+            }
+            req_wrong = Request(scope_wrong)
+            with self.assertRaises(HTTPException) as cm:
+                require_tma_auth(req_wrong, authorization=None)
+            self.assertEqual(cm.exception.status_code, 401)
+
+            # 3. Запрос из браузера с правильным X-Access-Key -> 200 OK (проходит)
+            scope_valid_header = {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/items",
+                "query_string": b"",
+                "headers": [(b"x-access-key", b"test_secret_key_123")],
+                "client": ("198.51.100.1", 54321),
+            }
+            req_valid_header = Request(scope_valid_header)
+            user = require_tma_auth(req_valid_header, authorization=None)
+            self.assertTrue(user.get("web_key"))
+
+            # 4. Запрос из браузера с правильным query параметром ?key=... -> 200 OK (проходит)
+            scope_valid_query = {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/items",
+                "query_string": b"key=test_secret_key_123",
+                "headers": [],
+                "client": ("198.51.100.1", 54321),
+            }
+            req_valid_query = Request(scope_valid_query)
+            user_q = require_tma_auth(req_valid_query, authorization=None)
+            self.assertTrue(user_q.get("web_key"))
+
+            # 5. Запрос через TMA с валидной подписью владельца -> 200 OK
+            valid_init = _build_signed_init_data(settings.telegram_bot_token, 349407845)
+            scope_tma = {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/items",
+                "query_string": b"",
+                "headers": [],
+                "client": ("198.51.100.1", 54321),
+            }
+            req_tma = Request(scope_tma)
+            user_tma = require_tma_auth(req_tma, authorization=f"tma {valid_init}")
+            self.assertEqual(user_tma["id"], 349407845)
+
+            # 6. Запрос через TMA с чужим user_id -> 403 Forbidden
+            stranger_init = _build_signed_init_data(settings.telegram_bot_token, 999999999)
+            with self.assertRaises(HTTPException) as cm:
+                require_tma_auth(req_tma, authorization=f"tma {stranger_init}")
+            self.assertEqual(cm.exception.status_code, 403)
+
+            # 7. Проверка вебхука: неверный или пустой secret token -> 403 Forbidden
+            from app.main import telegram_webhook
+
+            coro1 = telegram_webhook(req_anon, x_telegram_bot_api_secret_token=None)
+            with self.assertRaises(HTTPException) as cm_wh1:
+                coro1.send(None)
+            self.assertEqual(cm_wh1.exception.status_code, 403)
+
+            coro2 = telegram_webhook(req_anon, x_telegram_bot_api_secret_token="wrong_secret")
+            with self.assertRaises(HTTPException) as cm_wh2:
+                coro2.send(None)
+            self.assertEqual(cm_wh2.exception.status_code, 403)
+
+        finally:
+            settings.telegram_bot_token = old_token
+            settings.allowed_tg_user_id = old_user_id
+            settings.telegram_webhook_secret = old_secret
+            settings.web_access_key = old_web_key
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

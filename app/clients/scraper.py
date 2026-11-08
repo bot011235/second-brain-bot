@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from typing import Any
 
@@ -12,6 +13,8 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
+
+_JSON_SCRIPT_RE = re.compile(r'<script type="application/json"[^>]*>(.*?)</script>', flags=re.DOTALL)
 
 _META_PROP_RE = re.compile(
     r'<meta\s+[^>]*?(?:property|name)=["\'](?P<name>og:[a-z_:]+|twitter:[a-z_:]+|description|author)["\'][^>]*?content=["\'](?P<content>[^"\']+)["\']',
@@ -128,6 +131,71 @@ def parse_html_metadata(raw_html: str) -> dict[str, str | None]:
     }
 
 
+def _walk_threads_posts(node: Any, out: list[dict[str, Any]]) -> None:
+    if isinstance(node, dict):
+        cap = node.get("caption")
+        user = node.get("user")
+        if isinstance(cap, dict) and isinstance(cap.get("text"), str) and isinstance(user, dict):
+            out.append(
+                {
+                    "username": str(user.get("username") or ""),
+                    "code": node.get("code"),
+                    "taken_at": node.get("taken_at") or 0,
+                    "text": cap["text"],
+                }
+            )
+        for v in node.values():
+            _walk_threads_posts(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _walk_threads_posts(v, out)
+
+
+def fetch_threads_author_replies(post_url: str, author: str | None, limit: int = 3) -> list[str]:
+    """Возвращает ответы автора под его же постом в Threads (там часто пишут название фильма/сериала)."""
+    username = (author or "").lstrip("@").strip().lower()
+    if not username:
+        m = re.search(r"/@([^/]+)/post/", post_url)
+        username = m.group(1).lower() if m else ""
+    m_code = re.search(r"/post/([^/?#]+)", post_url)
+    post_code = m_code.group(1) if m_code else None
+    if not username:
+        return []
+    try:
+        # Публичный SSR-рендер для поисковых роботов содержит JSON поста вместе с ответами
+        resp = httpx.get(
+            post_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"},
+            follow_redirects=True,
+            timeout=15.0,
+        )
+        if resp.status_code != 200:
+            return []
+        posts: list[dict[str, Any]] = []
+        for m in _JSON_SCRIPT_RE.finditer(resp.text):
+            body = m.group(1)
+            if '"caption"' not in body:
+                continue
+            try:
+                _walk_threads_posts(json.loads(body), posts)
+            except Exception:
+                continue
+    except Exception:
+        return []
+
+    seen: set[str] = set()
+    replies: list[dict[str, Any]] = []
+    for p in posts:
+        code = str(p.get("code") or "")
+        if not code or code in seen or code == post_code:
+            continue
+        seen.add(code)
+        if p["username"].lower() == username and p["text"].strip():
+            replies.append(p)
+    replies.sort(key=lambda p: p.get("taken_at") or 0)
+    return [p["text"].strip()[:400] for p in replies[:limit]]
+
+
 def scrape_url(url: str) -> dict[str, Any]:
     """Извлекает OpenGraph-метаданные и основной текст статьи/поста по URL (включая редиректы и /embed для Threads)."""
     canonical = normalize_url(url)
@@ -154,12 +222,19 @@ def scrape_url(url: str) -> dict[str, Any]:
                 if embed_resp.status_code == 200:
                     t_parsed = parse_threads_embed(embed_resp.text)
                     if t_parsed.get("text"):
+                        post_text = str(t_parsed["text"])
+                        # Название часто лежит в первом/закреплённом комментарии автора — дотягиваем его ответы
+                        author_replies = fetch_threads_author_replies(base_post_url, t_parsed.get("author"))
+                        if author_replies:
+                            post_text += "\n\nКомментарии автора поста:\n" + "\n".join(
+                                f"— {r}" for r in author_replies
+                            )
                         return {
                             "canonical_url": base_post_url,
                             "ok": True,
                             "title": t_parsed.get("title"),
                             "description": t_parsed.get("description"),
-                            "text": t_parsed.get("text"),
+                            "text": post_text,
                             "author": t_parsed.get("author"),
                             "poster_url": t_parsed.get("image"),
                         }

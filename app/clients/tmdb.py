@@ -150,4 +150,5 @@ class TMDBClient:
             "imdb_id": imdb_id,
             "wikidata_id": wikidata_id,
             "rating_tmdb": round(float(data["vote_average"]), 1) if data.get("vote_average") else None,
+            "seasons_count": int(data["number_of_seasons"]) if is_tv and data.get("number_of_seasons") else None,
         }

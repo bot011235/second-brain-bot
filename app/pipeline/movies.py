@@ -155,6 +155,8 @@ def enrich_candidate(candidate: dict[str, Any], tmdb: TMDBClient | None = None) 
         meta["wikidata_id"] = enriched["wikidata_id"]
     if enriched.get("rating_tmdb"):
         meta["rating_tmdb"] = enriched["rating_tmdb"]
+    if enriched.get("seasons_count"):
+        meta["seasons_count"] = int(enriched["seasons_count"])
 
     return {
         "category": enriched.get("category") or "movie",

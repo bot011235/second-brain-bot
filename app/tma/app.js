@@ -5,6 +5,21 @@
     tg.expand();
   }
 
+  // Извлекаем ключ доступа из query-параметров (?key=...) и сохраняем в localStorage
+  const urlParams = new URLSearchParams(window.location.search);
+  const keyParam = urlParams.get("key");
+  if (keyParam) {
+    localStorage.setItem("sb_access_key", keyParam.trim());
+    urlParams.delete("key");
+    const cleanSearch = urlParams.toString();
+    const cleanUrl = window.location.pathname + (cleanSearch ? `?${cleanSearch}` : "") + window.location.hash;
+    window.history.replaceState({}, "", cleanUrl);
+  }
+
+  function getAccessKey() {
+    return localStorage.getItem("sb_access_key") || "";
+  }
+
   const state = {
     view: "catalog",
     tab: "",
@@ -40,8 +55,52 @@
     const headers = { "Content-Type": "application/json" };
     if (tg && tg.initData) {
       headers["Authorization"] = `tma ${tg.initData}`;
+    } else {
+      const key = getAccessKey();
+      if (key) {
+        headers["X-Access-Key"] = key;
+      }
     }
     return headers;
+  }
+
+  const authModal = document.getElementById("authModal");
+  const authForm = document.getElementById("authForm");
+  const authKeyInput = document.getElementById("authKeyInput");
+  const authErrorMsg = document.getElementById("authErrorMsg");
+  const authDescText = document.getElementById("authDescText");
+
+  function showAuthModal(isForbiddenTelegram = false) {
+    if (!authModal) return;
+    authModal.classList.remove("hidden");
+    if (isForbiddenTelegram) {
+      if (authDescText) {
+        authDescText.textContent = "Доступ запрещён: ваш Telegram-аккаунт не авторизован для этой базы.";
+      }
+      if (authForm) authForm.classList.add("hidden");
+    } else {
+      if (authForm) authForm.classList.remove("hidden");
+      if (authKeyInput) {
+        authKeyInput.value = "";
+        authKeyInput.focus();
+      }
+    }
+  }
+
+  function hideAuthModal() {
+    if (authModal) authModal.classList.add("hidden");
+    if (authErrorMsg) authErrorMsg.classList.add("hidden");
+  }
+
+  if (authForm) {
+    authForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const entered = (authKeyInput ? authKeyInput.value : "").trim();
+      if (!entered) return;
+      localStorage.setItem("sb_access_key", entered);
+      hideAuthModal();
+      refreshCurrentView();
+    });
   }
 
   function parseMeta(raw) {
@@ -204,8 +263,16 @@
             : "";
 
         const yearStr = item.release_year ? ` (${item.release_year})` : "";
-        const creatorLine = item.creator
-          ? `<div class="card-creator">👤 ${escapeHtml(item.creator)}</div>`
+        const meta = parseMeta(item.meta);
+        const subParts = [];
+        if (item.creator) {
+          subParts.push(`👤 ${escapeHtml(item.creator)}`);
+        }
+        if (item.category === "series" && meta.seasons_count) {
+          subParts.push(`📺 Сезонов: ${Number(meta.seasons_count)}`);
+        }
+        const creatorLine = subParts.length
+          ? `<div class="card-creator">${subParts.join(" · ")}</div>`
           : "";
 
         const allTags = [...(item.genres || []), ...(item.tags || [])];
@@ -348,7 +415,15 @@
     if (state.tab) params.set("tab", state.tab);
     if (state.q) params.set("q", state.q);
     const res = await fetch(`/api/originals?${params.toString()}`, { headers: authHeaders() });
+    if (res.status === 401 || res.status === 403) {
+      if (authErrorMsg && getAccessKey()) {
+        authErrorMsg.classList.remove("hidden");
+      }
+      showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+      return;
+    }
     if (!res.ok) return;
+    hideAuthModal();
     const data = await res.json();
     state.originals = data.items || [];
     renderOriginals();
@@ -367,6 +442,7 @@
     const params = new URLSearchParams();
     if (state.tab) params.set("tab", state.tab);
     const res = await fetch(`/api/tags?${params.toString()}`, { headers: authHeaders() });
+    if (res.status === 401 || res.status === 403) return;
     if (!res.ok) return;
     const data = await res.json();
     state.allTags = data.tags || [];
@@ -382,7 +458,15 @@
     if (state.sort) params.set("sort", state.sort);
 
     const res = await fetch(`/api/items?${params.toString()}`, { headers: authHeaders() });
+    if (res.status === 401 || res.status === 403) {
+      if (authErrorMsg && getAccessKey()) {
+        authErrorMsg.classList.remove("hidden");
+      }
+      showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+      return;
+    }
     if (!res.ok) return;
+    hideAuthModal();
     const data = await res.json();
     state.items = data.items || [];
     state.tgChatId = data.tg_chat_id || 0;
@@ -395,6 +479,10 @@
       headers: authHeaders(),
       body: JSON.stringify(payload),
     });
+    if (res.status === 401 || res.status === 403) {
+      showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+      return;
+    }
     if (res.ok) {
       const updated = await res.json();
       const idx = state.items.findIndex((i) => i.id === Number(itemId));
@@ -409,6 +497,10 @@
       method: "DELETE",
       headers: authHeaders(),
     });
+    if (res.status === 401 || res.status === 403) {
+      showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+      return;
+    }
     if (res.ok) {
       state.items = state.items.filter((i) => i.id !== Number(itemId));
       renderCatalog();
@@ -421,8 +513,17 @@
       method: "DELETE",
       headers: authHeaders(),
     });
+    if (res.status === 401 || res.status === 403) {
+      showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+      return;
+    }
     if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const deletedIds = new Set((data.deleted_item_ids || []).map(Number));
       state.originals = state.originals.filter((o) => o.id !== Number(origId));
+      if (deletedIds.size > 0) {
+        state.items = state.items.filter((i) => !deletedIds.has(Number(i.id)));
+      }
       renderOriginals();
     }
   }

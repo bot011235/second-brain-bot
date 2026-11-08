@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -59,18 +60,31 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             await keep_alive_task
 
 
-app = FastAPI(title="Personal DB — Второй мозг", version="0.2.0", lifespan=lifespan)
+app = FastAPI(
+    title="Personal DB — Второй мозг",
+    version="0.2.1",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 
 def require_tma_auth(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    """Проверяет Telegram.WebApp.initData, но разрешает локальный доступ и доступ с key-токеном в браузере."""
+    """Строгая авторизация доступа к API:
+    1. TestClient в автоматических тестах.
+    2. Telegram Mini App: криптографическая проверка подписи initData и вайтлист user_id.
+    3. Веб-браузер владельца: проверка секретного ключа (X-Access-Key, Authorization: Bearer, ?key= или cookie).
+    Любые неавторизованные запросы немедленно отклоняются с кодом 401/403.
+    """
     client_host = (request.client.host if request.client else "") or ""
-    if client_host in ("127.0.0.1", "::1", "localhost", "testclient"):
-        return {"id": settings.allowed_tg_user_id or 0, "local_dev": True}
+    if client_host == "testclient":
+        return {"id": settings.allowed_tg_user_id or 0, "local_test": True}
 
+    # Telegram Mini App (HMAC-SHA256 подпись данных Telegram)
     if authorization and authorization.lower().startswith("tma "):
         raw_init_data = authorization[4:].strip()
         if raw_init_data:
@@ -80,19 +94,29 @@ def require_tma_auth(
                 allowed_user_id=settings.allowed_tg_user_id,
             )
             if not user:
-                raise HTTPException(status_code=403, detail="Invalid or expired Telegram initData")
+                raise HTTPException(status_code=403, detail="Forbidden: unauthorized or invalid Telegram user")
             return user
 
-    # Разрешаем чтение каталога в обычном браузере, а для записи вне Telegram проверяем key или read-only
-    if request.method in ("GET", "HEAD", "OPTIONS"):
-        return {"id": settings.allowed_tg_user_id or 0, "web_browser": True}
+    # Веб-доступ владельца через секретный ключ
+    expected_key = (settings.web_access_key or settings.telegram_webhook_secret or "").strip()
+    if expected_key:
+        provided_key = (
+            request.headers.get("X-Access-Key")
+            or request.query_params.get("key")
+            or request.cookies.get("sb_access_key")
+            or ""
+        ).strip()
 
-    browser_key = request.headers.get("X-Access-Key") or request.query_params.get("key")
-    if browser_key and settings.telegram_webhook_secret and browser_key == settings.telegram_webhook_secret:
-        return {"id": settings.allowed_tg_user_id or 0, "web_key": True}
+        if not provided_key and authorization and authorization.lower().startswith("bearer "):
+            provided_key = authorization[7:].strip()
 
-    # Также разрешаем изменение статуса/оценки напрямую из веб-интерфейса владельца
-    return {"id": settings.allowed_tg_user_id or 0, "web_browser": True}
+        if provided_key and hmac.compare_digest(provided_key, expected_key):
+            return {"id": settings.allowed_tg_user_id or 0, "web_key": True}
+
+    raise HTTPException(
+        status_code=401,
+        detail="Unauthorized: Telegram Mini App authentication or valid access key required",
+    )
 
 
 class PatchItemPayload(BaseModel):
@@ -170,10 +194,28 @@ def api_delete_original(
 ) -> dict[str, Any]:
     conn = get_connection()
     try:
-        deleted = repo.delete_original_message(conn, orig_id)
-        if not deleted:
+        res = repo.delete_original_message(conn, orig_id)
+        if not res:
             raise HTTPException(status_code=404, detail="Not found")
-        return {"status": "deleted", "id": orig_id}
+        deleted_items = res.get("deleted_items") or []
+        if settings.tg_chat_id and settings.telegram_bot_token:
+            tg = TelegramClient()
+            msg_ids: set[int] = set()
+            if res.get("tg_message_id"):
+                msg_ids.add(int(res["tg_message_id"]))
+            for it in deleted_items:
+                if it.get("tg_message_id"):
+                    msg_ids.add(int(it["tg_message_id"]))
+            for mid in msg_ids:
+                try:
+                    tg.delete_message(settings.tg_chat_id, mid)
+                except Exception:
+                    pass
+        return {
+            "status": "deleted",
+            "id": orig_id,
+            "deleted_item_ids": [it["id"] for it in deleted_items],
+        }
     finally:
         conn.close()
 
@@ -252,7 +294,9 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    if settings.telegram_webhook_secret and x_telegram_bot_api_secret_token != settings.telegram_webhook_secret:
+    secret = (settings.telegram_webhook_secret or "").strip()
+    token = (x_telegram_bot_api_secret_token or "").strip()
+    if not secret or not hmac.compare_digest(token, secret):
         raise HTTPException(status_code=403, detail="Invalid secret token")
 
     update = await request.json()

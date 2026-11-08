@@ -43,7 +43,13 @@ class GroqLLMClient:
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
-    def _call_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any] | None:
+    def _call_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        accept: Any = None,
+    ) -> dict[str, Any] | None:
+        """Вызывает модели по цепочке; если задан accept(parsed) -> bool, неподходящий ответ переходит к следующей модели."""
         if not self.is_configured:
             return None
 
@@ -52,6 +58,7 @@ class GroqLLMClient:
             "Content-Type": "application/json",
         }
         models_to_try = [self.model, self.fallback_model, "qwen/qwen3.8-27b"]
+        first_parsed: dict[str, Any] | None = None
         for model in dict.fromkeys(m for m in models_to_try if m):
             payload = {
                 "model": model,
@@ -74,10 +81,12 @@ class GroqLLMClient:
                     content = resp.json()["choices"][0]["message"]["content"]
                     parsed = _extract_json_dict(content)
                     if parsed:
-                        return parsed
+                        if accept is None or accept(parsed):
+                            return parsed
+                        first_parsed = first_parsed or parsed
             except Exception:
                 continue
-        return None
+        return first_parsed
 
     def summarize_and_tag(
         self,
@@ -120,21 +129,31 @@ class GroqLLMClient:
         if not self.is_configured or not text.strip():
             return []
 
-        kind_ru = "фильмов и сериалов" if media_kind == "movie" else "книг"
+        kind_ru = "фильмов, сериалов и аниме" if media_kind == "movie" else "книг"
         sys_prompt = (
-            f"Извлеки из текста список рекомендуемых автором {kind_ru}. "
-            "ВАЖНО: "
-            "1) Если автор рекомендует конкретный фильм/сериал/книгу, а другие упоминает лишь для сравнения "
-            "(например: «кто любит Dark и Извне, рекомендую Час дьявола»), извлеки ТОЛЬКО то, что автор рекомендует! "
-            "Если это подборка/список из нескольких рекомендаций — извлеки все рекомендуемые позиции. "
-            "2) Если название написано на украинском или другом языке (например «Час Диявола», «Ззовні»), "
-            "обязательно переведи его в официальное русское или оригинальное английское название "
-            "(например «Час дьявола» или «The Devil's Hour»), чтобы оно находилось в базе TMDB/Книг. "
+            f"Ты разбираешь пост из соцсети и определяешь, о каких {kind_ru} он. "
+            "Пост может быть рекомендацией, подборкой, новостью, трейлером, анонсом или обзором — "
+            "во всех этих случаях извлеки произведение(я), КОТОРОМУ ПОСВЯЩЁН пост. "
+            "ПРАВИЛА: "
+            "1) Произведения, упомянутые лишь для сравнения или как студия/прошлые работы "
+            "(«кто любит Dark — рекомендую Час дьявола», «студия, снявшая Ковбой Бибоп») — НЕ извлекай. "
+            "Если это подборка из нескольких рекомендаций — извлеки все. "
+            "2) Название часто указано в «Комментариях автора поста» (например «Сериал «Три-Пайнс», 2022») — "
+            "это самый надёжный источник, используй название и год оттуда. "
+            "3) Если название не написано, но по сюжету/персонажам/автору книг ты УВЕРЕННО узнаёшь произведение "
+            "(например, инспектор Арман Гамаш в канадской деревне → сериал «Три сосны» / «Three Pines», 2022), — "
+            "верни его. Если не уверен — не выдумывай. "
+            "4) Названия на украинском или других языках переведи в официальное русское или оригинальное "
+            "английское название («Час Диявола» → «The Devil's Hour»), чтобы оно нашлось в TMDB/книжных базах. "
             "Верни СТРОГО JSON-объект вида: "
             '{"items": [{"title": "название на русском или английском", "year": 2022}]}. '
-            "Поле year — целое число или null."
+            "Поле year — целое число или null. Если произведений нет — {\"items\": []}."
         )
-        parsed = self._call_json(sys_prompt, text)
+
+        def _has_items(p: dict[str, Any]) -> bool:
+            return isinstance(p.get("items"), list) and len(p["items"]) > 0
+
+        parsed = self._call_json(sys_prompt, text, accept=_has_items)
         if not parsed or not isinstance(parsed.get("items"), list):
             return []
 

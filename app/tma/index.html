@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Второй мозг · Медиа-каталог</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=4" />
+  <link rel="stylesheet" href="./styles.css?v=6" />
 </head>
 <body>
   <header class="topbar">
@@ -72,6 +72,20 @@
     </div>
   </main>
 
-  <script src="./app.js?v=4"></script>
+  <!-- Модальное окно авторизации для браузера вне Telegram -->
+  <div id="authModal" class="auth-modal-overlay hidden">
+    <div class="auth-modal-card">
+      <div class="auth-icon">🔒</div>
+      <h2>Личный доступ</h2>
+      <p class="auth-desc" id="authDescText">База знаний защищена. Для входа введите секретный ключ доступа:</p>
+      <form id="authForm" class="auth-form">
+        <input type="password" id="authKeyInput" class="auth-input" placeholder="Введите ключ доступа..." autocomplete="current-password" required />
+        <button type="submit" class="auth-submit-btn">Войти</button>
+      </form>
+      <div id="authErrorMsg" class="auth-error-msg hidden">Неверный ключ доступа. Попробуйте снова.</div>
+    </div>
+  </div>
+
+  <script src="./app.js?v=6"></script>
 </body>
 </html>

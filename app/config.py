@@ -45,6 +45,7 @@ class Settings(BaseModel):
     telegram_webhook_secret: str = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
     tg_chat_id: int = _env_int("TG_CHAT_ID", 0)
     allowed_tg_user_id: int = _env_int("ALLOWED_TG_USER_ID", 0)
+    web_access_key: str = os.environ.get("WEB_ACCESS_KEY", "")
 
     # Topic IDs (0 = not configured yet)
     topic_movies_id: int = _env_int("TOPIC_MOVIES_ID", 0)

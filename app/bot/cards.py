@@ -110,9 +110,6 @@ def render_card_html(item: dict[str, Any], max_len: int = 1024) -> str:
 
     lines = [header]
 
-    if item.get("creator"):
-        lines.append(f"👤 {html.escape(str(item['creator']))}")
-
     raw_meta = item.get("meta")
     parsed_meta: dict[str, Any] = {}
     if raw_meta:
