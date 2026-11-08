@@ -28,12 +28,8 @@ def _format_source_label(url: str, idx: int | None = None) -> str:
         svc = "🤖 Reddit"
     elif "github.com" in domain:
         svc = "🐙 GitHub"
-    elif "vk.com" in domain or "vk.ru" in domain:
-        svc = "🔵 VK"
     elif "tiktok.com" in domain:
         svc = "🎵 TikTok"
-    elif "habr.com" in domain:
-        svc = "🔷 Habr"
     elif "medium.com" in domain:
         svc = "Ⓜ️ Medium"
     elif domain:
