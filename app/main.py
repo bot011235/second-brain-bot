@@ -98,16 +98,13 @@ def require_tma_auth(
             return user
 
     # Веб-доступ владельца через секретный ключ или пароль администратора
-    valid_keys = [
-        k.strip()
-        for k in [
-            settings.web_admin_password,
-            settings.web_access_key,
-            settings.telegram_webhook_secret,
-        ]
-        if k and k.strip()
-    ]
-    if valid_keys:
+    expected_key = (
+        settings.web_admin_password
+        or settings.web_access_key
+        or settings.telegram_webhook_secret
+        or ""
+    ).strip()
+    if expected_key:
         provided_key = (
             request.headers.get("X-Access-Key")
             or request.query_params.get("key")
@@ -118,10 +115,8 @@ def require_tma_auth(
         if not provided_key and authorization and authorization.lower().startswith("bearer "):
             provided_key = authorization[7:].strip()
 
-        if provided_key:
-            for vk in valid_keys:
-                if hmac.compare_digest(provided_key, vk):
-                    return {"id": settings.allowed_tg_user_id or 0, "web_key": True}
+        if provided_key and hmac.compare_digest(provided_key, expected_key):
+            return {"id": settings.allowed_tg_user_id or 0, "web_key": True}
 
     raise HTTPException(
         status_code=401,
@@ -150,26 +145,17 @@ def api_login(
     if input_username != expected_username:
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
-    valid_passwords = [
-        p.strip()
-        for p in [
-            settings.web_admin_password,
-            settings.web_access_key,
-            settings.telegram_webhook_secret,
-        ]
-        if p and p.strip()
-    ]
-    if not valid_passwords:
+    expected_password = (
+        settings.web_admin_password
+        or settings.web_access_key
+        or settings.telegram_webhook_secret
+        or ""
+    ).strip()
+    if not expected_password:
         raise HTTPException(status_code=500, detail="Server auth not configured")
 
     input_password = payload.password.strip()
-    matched = False
-    for vp in valid_passwords:
-        if hmac.compare_digest(input_password, vp):
-            matched = True
-            break
-
-    if not matched:
+    if not hmac.compare_digest(input_password, expected_password):
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
     # Успешная аутентификация: выставляем cookie sb_access_key на 1 год

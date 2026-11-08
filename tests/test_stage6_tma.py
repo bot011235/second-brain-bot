@@ -159,11 +159,15 @@ class TestStage6TMA(unittest.TestCase):
         old_user_id = settings.allowed_tg_user_id
         old_secret = settings.telegram_webhook_secret
         old_web_key = settings.web_access_key
+        old_admin_user = settings.web_admin_username
+        old_admin_pwd = settings.web_admin_password
 
         settings.telegram_bot_token = "123456:BOT_SECRET"
         settings.allowed_tg_user_id = 349407845
         settings.telegram_webhook_secret = "test_secret_key_123"
         settings.web_access_key = ""
+        settings.web_admin_username = "admin"
+        settings.web_admin_password = ""
 
         try:
             # 1. Запрос из браузера без ключа -> 401 Unauthorized
@@ -276,11 +280,18 @@ class TestStage6TMA(unittest.TestCase):
                 api_login(LoginPayload(username="intruder", password="test_password_456"), resp)
             self.assertEqual(cm_usr.exception.status_code, 401)
 
+            # Старый ключ вебхука отклоняется, если задан web_admin_password -> 401
+            with self.assertRaises(HTTPException) as cm_old:
+                api_login(LoginPayload(username="admin", password="test_secret_key_123"), resp)
+            self.assertEqual(cm_old.exception.status_code, 401)
+
         finally:
             settings.telegram_bot_token = old_token
             settings.allowed_tg_user_id = old_user_id
             settings.telegram_webhook_secret = old_secret
             settings.web_access_key = old_web_key
+            settings.web_admin_username = old_admin_user
+            settings.web_admin_password = old_admin_pwd
 
 
 if __name__ == "__main__":

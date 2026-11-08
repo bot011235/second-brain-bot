@@ -4,6 +4,48 @@ import json
 from typing import Any
 
 
+def _format_source_label(url: str, idx: int | None = None) -> str:
+    """Формирует понятное название сервиса для кнопки источника вместо безликого слова 'Источник'."""
+    from urllib.parse import urlparse
+
+    domain = ""
+    try:
+        domain = urlparse(url).netloc.lower().removeprefix("www.")
+    except Exception:
+        domain = ""
+
+    if "threads.net" in domain or "threads.com" in domain:
+        svc = "🧵 Threads"
+    elif "youtube.com" in domain or "youtu.be" in domain:
+        svc = "▶️ YouTube"
+    elif "instagram.com" in domain or "instagr.am" in domain:
+        svc = "📸 Instagram"
+    elif "t.me" in domain or "telegram.me" in domain:
+        svc = "✈️ Telegram"
+    elif "twitter.com" in domain or "x.com" in domain:
+        svc = "𝕏 Twitter"
+    elif "reddit.com" in domain or "redd.it" in domain:
+        svc = "🤖 Reddit"
+    elif "github.com" in domain:
+        svc = "🐙 GitHub"
+    elif "vk.com" in domain or "vk.ru" in domain:
+        svc = "🔵 VK"
+    elif "tiktok.com" in domain:
+        svc = "🎵 TikTok"
+    elif "habr.com" in domain:
+        svc = "🔷 Habr"
+    elif "medium.com" in domain:
+        svc = "Ⓜ️ Medium"
+    elif domain:
+        svc = f"🌐 {domain}"
+    else:
+        svc = "🔗 Ссылка"
+
+    if idx is not None:
+        return f"{svc} {idx}"
+    return svc
+
+
 def build_disambiguation_keyboard(item_id: int, candidates: list[dict[str, Any]]) -> dict[str, Any]:
     """Кнопки выбора из 2–3 кандидатов + 'Ничего не подходит'."""
     num_emojis = ["1️⃣", "2️⃣", "3️⃣"]

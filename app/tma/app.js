@@ -444,6 +444,9 @@
     if (state.q) params.set("q", state.q);
     const res = await fetch(`/api/originals?${params.toString()}`, { headers: authHeaders() });
     if (res.status === 401 || res.status === 403) {
+      if (res.status === 401) {
+        localStorage.removeItem("sb_access_key");
+      }
       if (authErrorMsg && getAccessKey()) {
         authErrorMsg.classList.remove("hidden");
       }
@@ -487,6 +490,9 @@
 
     const res = await fetch(`/api/items?${params.toString()}`, { headers: authHeaders() });
     if (res.status === 401 || res.status === 403) {
+      if (res.status === 401) {
+        localStorage.removeItem("sb_access_key");
+      }
       if (authErrorMsg && getAccessKey()) {
         authErrorMsg.classList.remove("hidden");
       }

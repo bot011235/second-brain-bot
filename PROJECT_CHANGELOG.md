@@ -43,6 +43,12 @@
 
 ## 3. Хронология изменений (Лог правок по всем чатам)
 
+### 2026-11-08 — Смена пароля администратора и отзыв старого ключа (`app/main.py`, `.env`, `app/tma/app.js`, `tests/test_stage6_tma.py`)
+- **Ротация пароля веб-доступа (`.env`, `app/main.py`)**:
+  - Установлен новый независимый пароль администратора `WEB_ADMIN_PASSWORD=sb_624a089197b933a0`.
+  - Старый ключ вебхука больше не принимается для входа на сайт (он остаётся только для защиты входящих запросов Telegram Bot API).
+  - При обнаружении 401 Unauthorized клиентская витрина `app.js` автоматически очищает устаревший ключ из `localStorage` браузера и отображает окно ввода нового пароля.
+
 ### 2026-11-08 — Форма логина и пароля с автосохранением в менеджеры паролей (`app/main.py`, `app/config.py`, `app/tma/`, `scripts/push_and_deploy.py`, `tests/test_stage6_tma.py`)
 - **Форма входа для менеджеров паролей (Google Passwords, Apple Keychain, Bitwarden) (`app/tma/index.html`, `app/tma/app.js`)**:
   - В модальное окно авторизации добавлена стандартная семантическая HTML-форма (`method="post" action="/api/login"`) с полями логина (`autocomplete="username"`, значение по умолчанию `admin`) и пароля (`autocomplete="current-password"`).
