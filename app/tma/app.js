@@ -151,8 +151,8 @@
       return;
     }
 
-    // На 1 строку выводим топ-4 самых частых тега, а остальные — в компактный раскрывающийся список в конце строки
-    const maxInline = window.innerWidth < 560 ? 2 : 5;
+    // Выводим жанры/теги в горизонтальную прокручиваемую карусель (на телефоне и ПК)
+    const maxInline = 25;
     const inlineTags = sorted.slice(0, maxInline);
     const overflowTags = sorted.slice(maxInline);
 
@@ -165,7 +165,7 @@
     if (overflowTags.length > 0) {
       const selectedInOverflow = overflowTags.some((t) => t.tag === state.tag);
       html += `<select id="moreTagsSelect" class="more-tags-select ${selectedInOverflow ? "active" : ""}">`;
-      html += `<option value="">Ещё жанры/теги (${overflowTags.length})...</option>`;
+      html += `<option value="">Ещё (${overflowTags.length})...</option>`;
       overflowTags.forEach((t) => {
         const sel = state.tag === t.tag ? "selected" : "";
         html += `<option value="${escapeHtml(t.tag)}" ${sel}>${escapeHtml(t.tag)} (${t.count})</option>`;
@@ -257,7 +257,10 @@
               <select class="user-rating-select" data-action="rating" data-id="${item.id}">
                 ${userRatingOptions}
               </select>
-              ${chatLinkHtml}
+              <div class="card-actions-right">
+                ${chatLinkHtml}
+                <button type="button" class="delete-btn" data-action="delete" data-id="${item.id}" title="Удалить">🗑</button>
+              </div>
             </div>
           </article>
         `;
@@ -315,6 +318,7 @@
               <span class="orig-topic-pill">${topicLabel}</span>
               ${authorHtml}
               <span class="orig-date">${escapeHtml(dateStr)}</span>
+              <button type="button" class="delete-btn" data-action="delete-orig" data-orig-id="${orig.id}" title="Удалить">🗑</button>
             </div>
             <div class="orig-raw-text">${linkifyText(rawTrim)}</div>
             ${
@@ -400,6 +404,57 @@
     }
   }
 
+  async function deleteItem(itemId) {
+    const res = await fetch(`/api/items/${itemId}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    if (res.ok) {
+      state.items = state.items.filter((i) => i.id !== Number(itemId));
+      renderCatalog();
+      loadTags();
+    }
+  }
+
+  async function deleteOriginal(origId) {
+    const res = await fetch(`/api/originals/${origId}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    if (res.ok) {
+      state.originals = state.originals.filter((o) => o.id !== Number(origId));
+      renderOriginals();
+    }
+  }
+
+  function enableCarouselTouchScroll(el) {
+    if (!el) return;
+    el.addEventListener(
+      "touchstart",
+      (e) => {
+        e.stopPropagation();
+      },
+      { passive: true }
+    );
+    el.addEventListener(
+      "touchmove",
+      (e) => {
+        e.stopPropagation();
+      },
+      { passive: true }
+    );
+    el.addEventListener(
+      "wheel",
+      (e) => {
+        if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+          el.scrollLeft += e.deltaY;
+          e.preventDefault();
+        }
+      },
+      { passive: false }
+    );
+  }
+
   // Обработчики событий
   document.getElementById("viewSwitch").addEventListener("click", (e) => {
     const btn = e.target.closest(".view-btn");
@@ -464,6 +519,16 @@
   });
 
   document.getElementById("catalogGrid").addEventListener("click", (e) => {
+    const delBtn = e.target.closest("[data-action='delete']");
+    if (delBtn && delBtn.dataset.id) {
+      deleteItem(delBtn.dataset.id);
+      return;
+    }
+    const delOrigBtn = e.target.closest("[data-action='delete-orig']");
+    if (delOrigBtn && delOrigBtn.dataset.origId) {
+      deleteOriginal(delOrigBtn.dataset.origId);
+      return;
+    }
     const summaryEl = e.target.closest(".summary-text");
     if (summaryEl) {
       summaryEl.classList.toggle("expanded");
@@ -491,6 +556,9 @@
   window.addEventListener("resize", () => {
     if (state.view === "catalog") renderTagBar();
   });
+
+  enableCarouselTouchScroll(document.getElementById("categoryTabs"));
+  enableCarouselTouchScroll(document.getElementById("tagBar"));
 
   refreshCurrentView();
 })();

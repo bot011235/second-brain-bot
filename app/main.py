@@ -163,6 +163,21 @@ def api_list_originals(
         conn.close()
 
 
+@app.delete("/api/originals/{orig_id}")
+def api_delete_original(
+    orig_id: int,
+    _user: dict[str, Any] = Depends(require_tma_auth),
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        deleted = repo.delete_original_message(conn, orig_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Not found")
+        return {"status": "deleted", "id": orig_id}
+    finally:
+        conn.close()
+
+
 @app.get("/api/items/{item_id}")
 def api_get_item(
     item_id: int,

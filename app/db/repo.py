@@ -677,3 +677,10 @@ def list_original_messages(
         }
         for r in cur.fetchall()
     ]
+
+
+def delete_original_message(conn: Any, orig_id: int) -> bool:
+    """Удаляет запись из архива оригинальных сообщений."""
+    cur = conn.execute("DELETE FROM original_messages WHERE id = ?", (orig_id,))
+    conn.commit()
+    return cur.rowcount > 0
