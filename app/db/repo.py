@@ -575,3 +575,105 @@ def list_tags_catalog(conn: Any, tab: str | None = None) -> list[dict[str, Any]]
         """
     )
     return [{"kind": r[0], "tag": r[1], "count": int(r[2])} for r in cur.fetchall()]
+
+
+def create_original_message(
+    conn: Any,
+    *,
+    topic_slug: str,
+    raw_text: str,
+    tg_topic_id: int | None = None,
+    tg_message_id: int | None = None,
+    source_url: str | None = None,
+    source_type: str = "manual",
+    author: str | None = None,
+    extracted_text: str | None = None,
+) -> dict[str, Any]:
+    """Сохраняет оригинальное сообщение пользователя в архив оригиналов."""
+    valid_slugs = ("movies", "books", "video", "article", "ideas")
+    slug = topic_slug if topic_slug in valid_slugs else "ideas"
+    cur = conn.execute(
+        """
+        INSERT INTO original_messages (
+            topic_slug, tg_topic_id, tg_message_id,
+            raw_text, source_url, source_type, author, extracted_text
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (slug, tg_topic_id, tg_message_id, raw_text, source_url, source_type, author, extracted_text),
+    )
+    row_id = int(cur.lastrowid)
+    conn.commit()
+    row = conn.execute(
+        """
+        SELECT id, topic_slug, tg_topic_id, tg_message_id, raw_text,
+               source_url, source_type, author, extracted_text, created_at
+        FROM original_messages WHERE id = ?
+        """,
+        (row_id,),
+    ).fetchone()
+    return {
+        "id": row[0],
+        "topic_slug": row[1],
+        "tg_topic_id": row[2],
+        "tg_message_id": row[3],
+        "raw_text": row[4],
+        "source_url": row[5],
+        "source_type": row[6],
+        "author": row[7],
+        "extracted_text": row[8],
+        "created_at": row[9],
+    }
+
+
+def list_original_messages(
+    conn: Any,
+    *,
+    tab: str | None = None,
+    q: str | None = None,
+    limit: int = 300,
+) -> list[dict[str, Any]]:
+    """Возвращает архив оригинальных сообщений с фильтрацией по категории чата и простым поиском."""
+    where_clauses: list[str] = []
+    params: list[Any] = []
+
+    if tab in ("movies", "books", "video", "article", "ideas"):
+        where_clauses.append("topic_slug = ?")
+        params.append(tab)
+
+    if q and q.strip():
+        raw_like = f"%{q.strip()}%"
+        low_like = f"%{q.strip().lower()}%"
+        where_clauses.append(
+            "(raw_text LIKE ? OR LOWER(raw_text) LIKE ? "
+            "OR COALESCE(extracted_text, '') LIKE ? OR LOWER(COALESCE(extracted_text, '')) LIKE ? "
+            "OR COALESCE(author, '') LIKE ? OR COALESCE(source_url, '') LIKE ?)"
+        )
+        params.extend([raw_like, low_like, raw_like, low_like, raw_like, raw_like])
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    cur = conn.execute(
+        f"""
+        SELECT id, topic_slug, tg_topic_id, tg_message_id, raw_text,
+               source_url, source_type, author, extracted_text, created_at
+        FROM original_messages
+        {where_sql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (*params, limit),
+    )
+    return [
+        {
+            "id": r[0],
+            "topic_slug": r[1],
+            "tg_topic_id": r[2],
+            "tg_message_id": r[3],
+            "raw_text": r[4],
+            "source_url": r[5],
+            "source_type": r[6],
+            "author": r[7],
+            "extracted_text": r[8],
+            "created_at": r[9],
+        }
+        for r in cur.fetchall()
+    ]

@@ -46,7 +46,10 @@ class TestStage7MCPAndBackup(unittest.TestCase):
             mcp_run_select("SELECT * FROM items; DROP TABLE items", conn=conn)
 
     def test_sql_backup_creation(self) -> None:
-        backup_path = create_sql_backup()
+        conn = get_connection(":memory:")
+        apply_migrations(conn)
+        conn.close()
+        backup_path = create_sql_backup(db_path_override="data/second_brain.db")
         self.assertTrue(backup_path.is_file())
         content = backup_path.read_text(encoding="utf-8")
         self.assertIn("CREATE TABLE", content)

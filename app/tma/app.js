@@ -6,14 +6,24 @@
   }
 
   const state = {
+    view: "catalog",
     tab: "",
     status: "all",
     tag: "",
     q: "",
     sort: "created",
     items: [],
+    originals: [],
     allTags: [],
     tgChatId: 0,
+  };
+
+  const TOPIC_LABELS = {
+    movies: "🎬 Кино и сериалы",
+    books: "📚 Книги",
+    video: "▶️ YouTube",
+    article: "📰 Статьи",
+    ideas: "💡 Идеи и посты",
   };
 
   const CATEGORY_EMOJI = {
@@ -74,7 +84,7 @@
       if (meta.info_link) {
         badges.push(`<a class="rating-badge" href="${meta.info_link}" target="_blank">🌐 Вики</a>`);
       }
-    } else {
+    } else if (item.category === "movie" || item.category === "series") {
       if (item.rating_imdb != null || item.imdb_id) {
         const url = item.imdb_id ? `https://www.imdb.com/title/${item.imdb_id}/` : "#";
         const label = item.rating_imdb != null ? `⭐ IMDb ${item.rating_imdb}` : "⭐ IMDb";
@@ -82,13 +92,16 @@
           `<a class="rating-badge ${badgeTone(item.rating_imdb, 10)}" href="${url}" target="_blank">${label}</a>`
         );
       }
-      if (item.rating_kp != null || item.kp_id) {
-        const url = item.kp_id ? `https://www.kinopoisk.ru/film/${item.kp_id}/` : "#";
-        const label = item.rating_kp != null ? `🟠 КП ${item.rating_kp}` : "🟠 КП";
-        badges.push(
-          `<a class="rating-badge ${badgeTone(item.rating_kp, 10)}" href="${url}" target="_blank">${label}</a>`
-        );
-      }
+      const kpQuery = encodeURIComponent((item.title_ru || item.title_orig || "").trim());
+      const kpUrl = item.kp_id
+        ? `https://www.kinopoisk.ru/film/${item.kp_id}/`
+        : kpQuery
+        ? `https://www.kinopoisk.ru/index.php?kp_query=${kpQuery}`
+        : "#";
+      const kpLabel = item.rating_kp != null ? `🟠 КП ${item.rating_kp}` : "🟠 КП";
+      badges.push(
+        `<a class="rating-badge ${badgeTone(item.rating_kp, 10)}" href="${kpUrl}" target="_blank">${kpLabel}</a>`
+      );
       if (meta.rating_tmdb != null) {
         const tmdbType = item.category === "series" ? "tv" : "movie";
         const url = meta.tmdb_id ? `https://www.themoviedb.org/${tmdbType}/${meta.tmdb_id}` : "#";
@@ -252,6 +265,100 @@
       .join("");
   }
 
+  function linkifyText(str) {
+    const escaped = escapeHtml(str || "");
+    return escaped.replace(
+      /(https?:\/\/[^\s<]+)/gi,
+      (url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`
+    );
+  }
+
+  function renderOriginals() {
+    const grid = document.getElementById("catalogGrid");
+    const empty = document.getElementById("emptyState");
+    const countLabel = document.getElementById("totalCountLabel");
+
+    countLabel.textContent = `Оригиналов: ${state.originals.length}`;
+
+    if (!state.originals.length) {
+      grid.innerHTML = "";
+      empty.classList.remove("hidden");
+      return;
+    }
+    empty.classList.add("hidden");
+
+    const catToCardClass = {
+      movies: "cat-movie",
+      books: "cat-book",
+      video: "cat-video",
+      article: "cat-article",
+      ideas: "cat-idea",
+    };
+
+    grid.innerHTML = state.originals
+      .map((orig) => {
+        const topicLabel = TOPIC_LABELS[orig.topic_slug] || "💡 Идеи и посты";
+        const catClass = catToCardClass[orig.topic_slug] || "cat-idea";
+        const dateStr = (orig.created_at || "").slice(0, 16).replace("T", " ");
+        const authorHtml = orig.author ? `<span class="orig-author">${escapeHtml(orig.author)}</span>` : "";
+        const sourceBtnHtml = orig.source_url
+          ? `<a class="rating-badge" href="${escapeHtml(orig.source_url)}" target="_blank">🔗 Открыть ссылку</a>`
+          : "";
+
+        const rawTrim = (orig.raw_text || "").trim();
+        const extTrim = (orig.extracted_text || "").trim();
+        const showExtracted = extTrim && extTrim !== rawTrim;
+
+        return `
+          <article class="item-card orig-card ${catClass}" data-orig-id="${orig.id}">
+            <div class="orig-header">
+              <span class="orig-topic-pill">${topicLabel}</span>
+              ${authorHtml}
+              <span class="orig-date">${escapeHtml(dateStr)}</span>
+            </div>
+            <div class="orig-raw-text">${linkifyText(rawTrim)}</div>
+            ${
+              showExtracted
+                ? `<div class="orig-extracted-box"><div class="orig-extracted-label">Текст из источника:</div><div class="orig-extracted-text">${escapeHtml(extTrim)}</div></div>`
+                : ""
+            }
+            ${sourceBtnHtml ? `<div class="orig-footer">${sourceBtnHtml}</div>` : ""}
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  function syncViewControls() {
+    const isOriginals = state.view === "originals";
+    document.getElementById("statusFilterSelect").classList.toggle("hidden", isOriginals);
+    document.getElementById("sortSelect").classList.toggle("hidden", isOriginals);
+    document.getElementById("tagBar").classList.toggle("hidden", isOriginals);
+    document.getElementById("searchInput").placeholder = isOriginals
+      ? "Простой поиск по оригиналам..."
+      : "Поиск по названию, автору, описанию...";
+  }
+
+  async function loadOriginals() {
+    const params = new URLSearchParams();
+    if (state.tab) params.set("tab", state.tab);
+    if (state.q) params.set("q", state.q);
+    const res = await fetch(`/api/originals?${params.toString()}`, { headers: authHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    state.originals = data.items || [];
+    renderOriginals();
+  }
+
+  function refreshCurrentView() {
+    syncViewControls();
+    if (state.view === "originals") {
+      loadOriginals();
+    } else {
+      loadTags();
+      loadItems();
+    }
+  }
   async function loadTags() {
     const params = new URLSearchParams();
     if (state.tab) params.set("tab", state.tab);
@@ -294,6 +401,15 @@
   }
 
   // Обработчики событий
+  document.getElementById("viewSwitch").addEventListener("click", (e) => {
+    const btn = e.target.closest(".view-btn");
+    if (!btn) return;
+    document.querySelectorAll("#viewSwitch .view-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.view = btn.dataset.view || "catalog";
+    refreshCurrentView();
+  });
+
   document.getElementById("categoryTabs").addEventListener("click", (e) => {
     const btn = e.target.closest(".tab");
     if (!btn) return;
@@ -301,8 +417,7 @@
     btn.classList.add("active");
     state.tab = btn.dataset.tab || "";
     state.tag = "";
-    loadTags();
-    loadItems();
+    refreshCurrentView();
   });
 
   document.getElementById("statusFilterSelect").addEventListener("change", (e) => {
@@ -336,13 +451,16 @@
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
       state.q = e.target.value.trim();
-      loadItems();
+      if (state.view === "originals") {
+        loadOriginals();
+      } else {
+        loadItems();
+      }
     }, 220);
   });
 
   document.getElementById("refreshBtn").addEventListener("click", () => {
-    loadTags();
-    loadItems();
+    refreshCurrentView();
   });
 
   document.getElementById("catalogGrid").addEventListener("click", (e) => {
@@ -370,8 +488,9 @@
     }
   });
 
-  window.addEventListener("resize", () => renderTagBar());
+  window.addEventListener("resize", () => {
+    if (state.view === "catalog") renderTagBar();
+  });
 
-  loadTags();
-  loadItems();
+  refreshCurrentView();
 })();

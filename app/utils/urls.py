@@ -12,6 +12,8 @@ _STRIP_PARAMS = {
     "utm_id",
     "igsh",
     "igshid",
+    "xmt",
+    "slof",
     "si",
     "feature",
     "fbclid",

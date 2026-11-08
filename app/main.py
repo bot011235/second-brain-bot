@@ -117,6 +117,21 @@ def api_list_tags(
         conn.close()
 
 
+@app.get("/api/originals")
+def api_list_originals(
+    tab: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    limit: int = Query(default=300, ge=1, le=500),
+    _user: dict[str, Any] = Depends(require_tma_auth),
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        items = repo.list_original_messages(conn, tab=tab, q=q, limit=limit)
+        return {"items": items, "count": len(items)}
+    finally:
+        conn.close()
+
+
 @app.get("/api/items/{item_id}")
 def api_get_item(
     item_id: int,

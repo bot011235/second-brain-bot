@@ -77,6 +77,39 @@ body {
   background: #f1f5f9;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.view-switch {
+  display: inline-flex;
+  background: #f1f5f9;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.view-btn {
+  background: transparent;
+  color: #475569;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.view-btn.active {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
 .tabs {
   display: flex;
   gap: 6px;
@@ -428,7 +461,83 @@ body {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
+}
+
+/* Карточки оригиналов */
+.orig-card {
+  gap: 8px;
+}
+
+.orig-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.orig-topic-pill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  color: #0f172a;
+}
+
+.orig-author {
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.orig-date {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.orig-raw-text {
+  font-size: 13px;
+  color: #0f172a;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.orig-raw-text a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.orig-extracted-box {
+  background: rgba(255, 255, 255, 0.55);
+  border-left: 3px solid var(--accent);
+  padding: 7px 10px;
+  border-radius: 6px;
+}
+
+.orig-extracted-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+
+.orig-extracted-text {
+  font-size: 12.5px;
+  color: #1e293b;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.orig-footer {
+  display: flex;
+  justify-content: flex-end;
 }
 
 @media (max-width: 640px) {

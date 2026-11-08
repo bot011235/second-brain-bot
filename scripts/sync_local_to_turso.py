@@ -64,6 +64,21 @@ def sync_local_to_turso() -> None:
                 row,
             )
 
+        # Проверяем наличие original_messages в локальной БД
+        has_orig = local_conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='original_messages'"
+        ).fetchone()
+        if has_orig:
+            orig_rows = local_conn.execute(
+                "SELECT id, topic_slug, tg_topic_id, tg_message_id, raw_text, source_url, source_type, author, extracted_text, created_at FROM original_messages ORDER BY id"
+            ).fetchall()
+            print(f"4.5️⃣ Переношу оригинальные сообщения (original_messages): {len(orig_rows)} шт...")
+            for row in orig_rows:
+                remote_conn.execute(
+                    "INSERT OR REPLACE INTO original_messages (id, topic_slug, tg_topic_id, tg_message_id, raw_text, source_url, source_type, author, extracted_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    row,
+                )
+
         print("5️⃣ Индексирую полнотекстовый поиск FTS5 в Turso...")
         for row in items:
             sync_item_fts(remote_conn, int(row[0]))

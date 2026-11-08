@@ -147,7 +147,7 @@ def render_card_html(item: dict[str, Any], max_len: int = 1024) -> str:
 
         if info_link := parsed_meta.get("info_link"):
             ratings.append(f'🌐 <a href="{html.escape(str(info_link))}">Вики</a>')
-    else:
+    elif cat in ("movie", "series"):
         imdb_url = f"https://www.imdb.com/title/{item['imdb_id']}/" if item.get("imdb_id") else None
         if item.get("rating_imdb") is not None and imdb_url:
             ratings.append(f'⭐ <a href="{html.escape(imdb_url)}">IMDb <b>{item["rating_imdb"]}</b></a>')

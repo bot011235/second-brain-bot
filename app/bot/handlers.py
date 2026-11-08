@@ -122,6 +122,47 @@ def _publish_and_replace(
             tg.delete_message(chat_id, int(user_msg_id))
 
 
+def _resolve_original_topic_slug(topic_name: str, category: str) -> str:
+    if topic_name == "movies" or category in ("movie", "series"):
+        return "movies"
+    if topic_name == "books" or category == "book":
+        return "books"
+    if topic_name == "youtube" or category == "video":
+        return "video"
+    if topic_name == "articles" or category == "article":
+        return "article"
+    return "ideas"
+
+
+def _record_original_message(
+    conn: Any,
+    *,
+    topic_name: str,
+    category: str,
+    raw_text: str,
+    thread_id: int | None = None,
+    msg_id: int | None = None,
+    source_url: str | None = None,
+    source_type: str = "manual",
+    author: str | None = None,
+    extracted_text: str | None = None,
+) -> None:
+    try:
+        repo.create_original_message(
+            conn,
+            topic_slug=_resolve_original_topic_slug(topic_name, category),
+            raw_text=raw_text,
+            tg_topic_id=thread_id,
+            tg_message_id=msg_id,
+            source_url=source_url,
+            source_type=source_type,
+            author=author,
+            extracted_text=extracted_text,
+        )
+    except Exception:
+        pass
+
+
 def _handle_movie_text(
     conn: Any,
     text: str,
@@ -130,6 +171,8 @@ def _handle_movie_text(
     user_msg_id: int | None,
     tg: TelegramClient,
     tmdb: TMDBClient | None = None,
+    source_url: str | None = None,
+    source_type: str = "manual",
 ) -> dict[str, Any]:
     query, year = movies_pipeline.parse_title_and_year(text)
     candidates = movies_pipeline.search_movie_candidates(query, year=year, tmdb=tmdb, limit=3)
@@ -143,6 +186,8 @@ def _handle_movie_text(
             raw_input=text,
             processing_status="needs_input",
             tg_topic_id=thread_id,
+            source_url=source_url,
+            source_type=source_type,
         )
         _publish_and_replace(conn, tg, item, chat_id, thread_id, user_msg_id)
         return {"status": "needs_input", "item_id": item["id"]}
@@ -157,7 +202,7 @@ def _handle_movie_text(
             release_year=enriched.get("release_year"),
         )
         if existing:
-            repo.add_source_to_item(conn, existing["id"], source_url=None, source_type="manual", raw_text=text)
+            repo.add_source_to_item(conn, existing["id"], source_url=source_url, source_type=source_type, raw_text=text)
             if chat_id and settings.telegram_bot_token:
                 if user_msg_id:
                     tg.delete_message(chat_id, int(user_msg_id))
@@ -188,6 +233,8 @@ def _handle_movie_text(
             raw_input=text,
             processing_status="ok",
             tg_topic_id=thread_id,
+            source_url=source_url,
+            source_type=source_type,
         )
         _publish_and_replace(conn, tg, item, chat_id, thread_id, user_msg_id)
         return {"status": "created", "item_id": item["id"], "category": item["category"]}
@@ -201,6 +248,8 @@ def _handle_movie_text(
         processing_status="needs_choice",
         meta={"candidates": candidates[:3]},
         tg_topic_id=thread_id,
+        source_url=source_url,
+        source_type=source_type,
     )
     _publish_and_replace(conn, tg, item, chat_id, thread_id, user_msg_id)
     return {"status": "needs_choice", "item_id": item["id"], "candidates": len(candidates[:3])}
@@ -214,6 +263,8 @@ def _handle_book_text(
     user_msg_id: int | None,
     tg: TelegramClient,
     books_client: BooksClient | None = None,
+    source_url: str | None = None,
+    source_type: str = "manual",
 ) -> dict[str, Any]:
     query = text.splitlines()[0].strip()
     candidates = books_pipeline.search_book_candidates(query, books_client=books_client, limit=3)
@@ -226,6 +277,8 @@ def _handle_book_text(
             raw_input=text,
             processing_status="needs_input",
             tg_topic_id=thread_id,
+            source_url=source_url,
+            source_type=source_type,
         )
         _publish_and_replace(conn, tg, item, chat_id, thread_id, user_msg_id)
         return {"status": "needs_input", "item_id": item["id"]}
@@ -239,7 +292,7 @@ def _handle_book_text(
             creator=enriched.get("creator"),
         )
         if existing:
-            repo.add_source_to_item(conn, existing["id"], source_url=None, source_type="manual", raw_text=text)
+            repo.add_source_to_item(conn, existing["id"], source_url=source_url, source_type=source_type, raw_text=text)
             if chat_id and settings.telegram_bot_token:
                 if user_msg_id:
                     tg.delete_message(chat_id, int(user_msg_id))
@@ -268,6 +321,8 @@ def _handle_book_text(
             raw_input=text,
             processing_status="ok",
             tg_topic_id=thread_id,
+            source_url=source_url,
+            source_type=source_type,
         )
         _publish_and_replace(conn, tg, item, chat_id, thread_id, user_msg_id)
         return {"status": "created", "item_id": item["id"], "category": "book"}
@@ -280,6 +335,8 @@ def _handle_book_text(
         processing_status="needs_choice",
         meta={"candidates": candidates[:3]},
         tg_topic_id=thread_id,
+        source_url=source_url,
+        source_type=source_type,
     )
     _publish_and_replace(conn, tg, item, chat_id, thread_id, user_msg_id)
     return {"status": "needs_choice", "item_id": item["id"], "candidates": len(candidates[:3])}
@@ -308,6 +365,16 @@ def _handle_message(
 
     # Этап 2: запросы в топике Movies (поддерживает и 1 фильм, и список фильмов построчно)
     if topic_name == "movies" and (not url or movies_pipeline.parse_direct_media_ids(text)):
+        _record_original_message(
+            conn,
+            topic_name=topic_name,
+            category="movie",
+            raw_text=text,
+            thread_id=thread_id,
+            msg_id=msg_id,
+            source_url=url,
+            source_type=source_type,
+        )
         lines = split_batch_lines(text) if not url else [text]
         if len(lines) > 1:
             results = [
@@ -321,6 +388,15 @@ def _handle_message(
 
     # Этап 3: запросы в топике Books (поддерживает и 1 книгу, и список книг построчно)
     if topic_name == "books" and not url:
+        _record_original_message(
+            conn,
+            topic_name=topic_name,
+            category="book",
+            raw_text=text,
+            thread_id=thread_id,
+            msg_id=msg_id,
+            source_type="manual",
+        )
         lines = split_batch_lines(text)
         if len(lines) > 1:
             results = [
@@ -343,27 +419,7 @@ def _handle_message(
 
     # Этап 4: дедупликация и обогащение ссылок (YouTube, статьи, посты, подборки)
     if canonical_url:
-        if topic_name not in ("movies", "books"):
-            existing_url_item = repo.find_existing_by_url(conn, canonical_url)
-            if existing_url_item:
-                repo.add_source_to_item(
-                    conn,
-                    existing_url_item["id"],
-                    source_url=canonical_url,
-                    source_type=source_type,
-                    raw_text=text,
-                )
-                if chat_id and settings.telegram_bot_token:
-                    if msg_id:
-                        tg.delete_message(chat_id, int(msg_id))
-                    tg.send_message(
-                        chat_id,
-                        f"🔁 Уже в базе: <b>{existing_url_item.get('title_ru')}</b>",
-                        message_thread_id=thread_id,
-                    )
-                return {"status": "duplicate_item", "item_id": existing_url_item["id"]}
-
-        # Извлекаем метаданные страницы или YouTube-видео
+        # Извлекаем метаданные страницы или YouTube-видео (включая редиректы share-ссылок Threads)
         if source_type == "youtube":
             yt_info = YouTubeClient().fetch_video_info(canonical_url)
             raw_title = yt_info.get("title")
@@ -374,12 +430,46 @@ def _handle_message(
             tags = list(yt_info.get("tags") or [])
         else:
             scraped = scrape_url(canonical_url)
+            canonical_url = scraped.get("canonical_url") or canonical_url
             raw_title = scraped.get("title")
             raw_desc = scraped.get("text") or scraped.get("description")
             creator = scraped.get("author")
             poster_url = scraped.get("poster_url")
             if not scraped.get("ok") and text.strip() == url.strip():
                 processing_status = "needs_input"
+
+        _record_original_message(
+            conn,
+            topic_name=topic_name,
+            category=category,
+            raw_text=text,
+            thread_id=thread_id,
+            msg_id=msg_id,
+            source_url=canonical_url,
+            source_type=source_type,
+            author=creator,
+            extracted_text=raw_desc or raw_title,
+        )
+
+        if topic_name not in ("movies", "books"):
+            existing_url_item = repo.find_existing_by_url(conn, canonical_url)
+            if existing_url_item:
+                repo.add_source_to_item(
+                    conn,
+                    existing_url_item["id"],
+                    source_url=canonical_url,
+                    source_type=source_type,
+                    raw_text=raw_desc or text,
+                )
+                if chat_id and settings.telegram_bot_token:
+                    if msg_id:
+                        tg.delete_message(chat_id, int(msg_id))
+                    tg.send_message(
+                        chat_id,
+                        f"🔁 Уже в базе: <b>{existing_url_item.get('title_ru')}</b>",
+                        message_thread_id=thread_id,
+                    )
+                return {"status": "duplicate_item", "item_id": existing_url_item["id"]}
 
         llm = GroqLLMClient()
         combined_context = "\n".join(p for p in (text, raw_title, raw_desc) if p)
@@ -393,21 +483,35 @@ def _handle_message(
                 for entry in extracted:
                     q_str = f"{entry['title']} {entry['year']}" if entry.get("year") else str(entry["title"])
                     if topic_name == "movies":
-                        r = _handle_movie_text(conn, q_str, chat_id, thread_id, None, tg, tmdb=tmdb)
-                    else:
-                        r = _handle_book_text(conn, q_str, chat_id, thread_id, None, tg, books_client=books_client)
-                    if r.get("item_id"):
-                        repo.add_source_to_item(
+                        r = _handle_movie_text(
                             conn,
-                            int(r["item_id"]),
+                            q_str,
+                            chat_id,
+                            thread_id,
+                            None,
+                            tg,
+                            tmdb=tmdb,
                             source_url=canonical_url,
                             source_type=source_type,
-                            raw_text=text,
+                        )
+                    else:
+                        r = _handle_book_text(
+                            conn,
+                            q_str,
+                            chat_id,
+                            thread_id,
+                            None,
+                            tg,
+                            books_client=books_client,
+                            source_url=canonical_url,
+                            source_type=source_type,
                         )
                     results.append(r)
                 if chat_id and msg_id and settings.telegram_bot_token:
                     tg.delete_message(chat_id, int(msg_id))
                 return {"status": "collection_extracted", "count": len(results), "results": results}
+            # Если из ссылки не удалось извлечь ни одного фильма/книги, сохраняем как пост/статью/видео
+            category = "post" if source_type in ("threads", "instagram") else ("video" if source_type == "youtube" else "article")
 
         # Обычная ссылка (YouTube / статья / пост): делаем выжимку и теги
         existing_tags = repo.list_existing_tags(conn)
@@ -417,14 +521,24 @@ def _handle_message(
         for t in llm_res.get("tags") or []:
             if t not in tags:
                 tags.append(t)
-    elif category == "idea" and settings.llm_for_ideas:
-        llm = GroqLLMClient()
-        if llm.is_configured and len(text) > 80:
-            existing_tags = repo.list_existing_tags(conn)
-            llm_res = llm.summarize_and_tag(title=None, text=text, existing_tags=existing_tags)
-            title_line = llm_res.get("title_ru") or title_line
-            summary = llm_res.get("summary") or summary
-            tags = list(llm_res.get("tags") or [])
+    else:
+        _record_original_message(
+            conn,
+            topic_name=topic_name,
+            category=category,
+            raw_text=text,
+            thread_id=thread_id,
+            msg_id=msg_id,
+            source_type="manual",
+        )
+        if category == "idea" and settings.llm_for_ideas:
+            llm = GroqLLMClient()
+            if llm.is_configured and len(text) > 80:
+                existing_tags = repo.list_existing_tags(conn)
+                llm_res = llm.summarize_and_tag(title=None, text=text, existing_tags=existing_tags)
+                title_line = llm_res.get("title_ru") or title_line
+                summary = llm_res.get("summary") or summary
+                tags = list(llm_res.get("tags") or [])
 
     item = repo.create_item(
         conn,

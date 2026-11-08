@@ -88,6 +88,31 @@ class TestStage6TMA(unittest.TestCase):
         books = repo.list_items_catalog(conn, tab="books")
         self.assertEqual([i["id"] for i in books], [b1["id"]])
 
+        # Архив оригиналов: фильтрация по категории чата и простой поиск
+        repo.create_original_message(
+            conn,
+            topic_slug="movies",
+            raw_text="https://www.threads.com/share/_un9gYcFq",
+            source_url="https://www.threads.com/@morozova_katie/post/DfaRARGCNeh",
+            source_type="threads",
+            author="@morozova_katie",
+            extracted_text="Хто любить Dark, Ззовні, дуже рекомендую Час Дияволa",
+        )
+        repo.create_original_message(
+            conn,
+            topic_slug="books",
+            raw_text="Гиперион Дэн Симмонс",
+            source_type="manual",
+        )
+
+        orig_movies = repo.list_original_messages(conn, tab="movies")
+        self.assertEqual(len(orig_movies), 1)
+        self.assertEqual(orig_movies[0]["author"], "@morozova_katie")
+
+        orig_search = repo.list_original_messages(conn, q="Диявол")
+        self.assertEqual(len(orig_search), 1)
+        self.assertEqual(orig_search[0]["topic_slug"], "movies")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
