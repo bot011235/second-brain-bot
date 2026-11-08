@@ -32,4 +32,4 @@ Copy-Item .env.example .env
    - Включите **YouTube Data API v3** (и при желании **Books API**) в *APIs & Services → Library*.
    - В *Credentials* создайте API Key (`Public data`) и пропишите его в `YOUTUBE_API_KEY` и `GOOGLE_BOOKS_API_KEY`.
 8. **Хостинг контейнера (Этап 5):**
-   - Развёртывание **вообще без карты и залогов** — на **Render.com** (Free Web Service из `Dockerfile`) или **Hugging Face Spaces** (Docker Space).
+   - Развёртывание на **Render.com** (Free Web Service из нашего `Dockerfile`) — 100% бесплатно, без карты и залогов.

@@ -17,7 +17,7 @@
    > ⚠️ **Правило по умолчанию:** всё, что попадает в бота, **считается несекретным**. Данные проходят через Telegram, Groq и Turso без E2E-шифрования, поэтому пароли, номера документов и сканы в группу не отправлять.
 2. **Медиа-контур** (кино, сериалы, книги, YouTube, статьи, посты, идеи) — **предмет этого проекта**:
    * **Inbox:** закрытая Telegram-группа с топиками.
-   * **Backend:** Python (FastAPI) в Docker-контейнере — деплой **без привязки карты и залогов** (например, **Render.com** или **Hugging Face Spaces**), webhook.
+   * **Backend:** Python (FastAPI) в Docker-контейнере на **Render.com** (Free Web Service без привязки карты), webhook.
    * **БД:** **Turso (libSQL)** + локальная embedded-реплика на ПК.
    * **Витрина:** карточки в Telegram (`parse_mode="HTML"` + inline-кнопки) и **Telegram Mini App (TMA)**.
 
@@ -27,7 +27,7 @@
 
 | Компонент | Решение | Роль | Free tier / заметки |
 | :--- | :--- | :--- | :--- |
-| **Backend** | **Render.com / Hugging Face Spaces** (Docker, Python 3.12, FastAPI) | Webhook Telegram, API для TMA, раздача статики TMA | **100% бесплатно без привязки карты и залогов** (0 PLN). Запускает существующий `Dockerfile` напрямую. |
+| **Backend** | **Render.com** (Docker Web Service, Python 3.12, FastAPI) | Webhook Telegram, API для TMA, раздача статики TMA | **100% бесплатно без привязки карты** (0 PLN). Запускает существующий `Dockerfile` напрямую. 750 бесплатных часов в месяц. |
 | **БД** | **Turso (libSQL)** | Хранение, FTS5, позже векторы | 5 ГБ, 500 млн rows read, 10 млн rows written в месяц. Полные сканы съедают rows read, поэтому нужны индексы. |
 | **Кино: поиск и метаданные** | **TMDB API** (`themoviedb.org`) + **Wikidata API** | Официальный поиск по-русски и в оригинале, описание, жанры, постер, год, тип (фильм/сериал), `imdb_id`, `kp_id` (`P2603`), Rotten Tomatoes ID (`P1258`) | 100% официально и бесплатно. Если ключ TMDB не задан — резервный поиск через Wikidata. |
 | **Кино: рейтинги КП и IMDb** | **`rating.kinopoisk.ru/{kp_id}.xml`** | Официальный XML-виджет Кинопоиска: отдаёт `<kp_rating>` и `<imdb_rating>` по `kp_id` | Бесплатно, без ключей и сторонних сайтов. |
@@ -315,7 +315,7 @@ Personal_DB/
 **Ключевые библиотеки:** `fastapi`, `uvicorn`, `httpx`, `pydantic`, `pydantic-settings`, `libsql`, `groq`, `selectolax` (OG-теги), `trafilatura`, `mcp` (FastMCP), `pytest`.
 **Синхронный код** (`def`-эндпоинты, sync `httpx`, sync `libsql`): для одного пользователя async не нужен, а так проще.
 
-**Переменные окружения** (`.env` локально, env vars / Secrets на хостинге Render.com / Hugging Face Spaces):
+**Переменные окружения** (`.env` локально, Environment Variables на **Render.com**):
 ```
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=
@@ -354,7 +354,7 @@ LOCAL_DB_PATH=data/second_brain.db
 | **2. Movies** | Kinopoisk → OMDb, нормализация, дедупликация, выбор кандидата, `needs_input`, карточка с рейтингами | `Разделение` → выбор → карточка с IMDb/КП/RT; повторная отправка → «уже в базе» |
 | **3. Books** | Google Books (+ OpenLibrary), выбор кандидата, дедупликация | Аналогично Movies |
 | **4. Ссылки** | Нормализация URL, YouTube API, trafilatura, OG, Groq (summary/теги/списки названий), перезалив картинок, посты-подборки → N карточек | Ссылки YouTube, статьи и Threads обрабатываются; подборка в Movies даёт N карточек |
-| **5. Деплой** | Dockerfile, деплой без карты и залогов (**Render.com** или **Hugging Face Spaces**), `setWebhook`, переменные окружения | Бот работает 24/7 без ПК |
+| **5. Деплой** | Dockerfile, деплой на **Render.com** (Free Web Service), `setWebhook`, переменные окружения | Бот работает 24/7 без ПК |
 | **6. TMA** | API + фронтенд, initData, фильтры, сортировки, синхронизация с карточками | Каталог открывается из меню бота, фильтры и смена статуса работают |
 | **7. Второй мозг** | Read-only MCP-сервер с embedded replica, бэкапы, затем эмбеддинги и семантический поиск | MCP отвечает на запросы по базе в Antigravity |
 
@@ -366,7 +366,7 @@ LOCAL_DB_PATH=data/second_brain.db
 
 | # | Решение | Причина |
 | :--- | :--- | :--- |
-| D1 | Хостинг — **развернуть вообще без карты и залогов** (например, на **Render.com** или **Hugging Face Spaces**) | В Google Cloud потребовался возвратный залог 120 PLN при привязке карты; отказ от платного биллинга GCP (GCP используется только для бесплатного ключа YouTube/Books API без карты) |
+| D1 | Хостинг — **Render.com** (Free Web Service из Dockerfile) | 100% бесплатно, без карты и залогов; в Google Cloud биллинг закрыт (GCP остаётся только для бесплатного ключа YouTube/Books API без карты) |
 | D2 | Кино: **Официальная связка TMDB (`themoviedb.org`) + Wikidata (`P345`/`P2603`/`P1258`) + `rating.kinopoisk.ru/{kp_id}.xml`** | Отказ от неофициальных сайтов (`kinopoiskapiunofficial`, `omdbapi`) в пользу 100% официальных источников |
 | D3 | Неоднозначность → **выбор из 2–3 кандидатов кнопками** | Не допускать записей с не тем фильмом |
 | D4 | Пост-подборка → **отдельная карточка на каждый фильм/книгу**, источник общий; `UNIQUE(item_id, source_url)` | В v1 `source_url UNIQUE` запрещал такой сценарий |

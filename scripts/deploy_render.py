@@ -24,6 +24,7 @@ SECRETS_KEYS = [
     "GROQ_FALLBACK_MODEL",
     "LLM_FOR_IDEAS",
     "TMDB_API_KEY",
+    "PUBLIC_BASE_URL",
 ]
 
 

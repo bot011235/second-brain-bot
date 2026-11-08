@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,12 +24,39 @@ from app.db.migrate import apply_migrations
 from app.utils.initdata import verify_telegram_init_data
 
 TMA_DIR = Path(__file__).resolve().parent / "tma"
+DEFAULT_PUBLIC_URL = "https://second-brain-bot-4wcq.onrender.com"
+
+
+async def _keep_alive_loop() -> None:
+    """Фоновый пинг публичного URL каждые 4 минуты, чтобы инстанс Render Free не уходил в сон (15 мин тайм-аут)."""
+    base_url = (
+        settings.public_base_url
+        or os.environ.get("RENDER_EXTERNAL_URL", "")
+        or DEFAULT_PUBLIC_URL
+    ).strip().rstrip("/")
+    if not base_url:
+        return
+    target = f"{base_url}/healthz"
+    await asyncio.sleep(15)
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        while True:
+            try:
+                await client.get(target, headers={"User-Agent": "SecondBrainKeepAlive/1.0"})
+            except Exception:
+                pass
+            await asyncio.sleep(240)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     apply_migrations()
-    yield
+    keep_alive_task = asyncio.create_task(_keep_alive_loop())
+    try:
+        yield
+    finally:
+        keep_alive_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await keep_alive_task
 
 
 app = FastAPI(title="Personal DB — Второй мозг", version="0.2.0", lifespan=lifespan)

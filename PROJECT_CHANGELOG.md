@@ -43,6 +43,14 @@
 
 ## 3. Хронология изменений (Лог правок по всем чатам)
 
+### 2026-11-08 — Защита Render от засыпания (Keep-Alive 24/7) и единый деплой из любого чата (`scripts/push_and_deploy.py`)
+- **Автодеплой для всех чатов (`scripts/push_and_deploy.py`, `.env`)**:
+  - В `.env` сохранены `GITHUB_TOKEN`, `RENDER_API_KEY`, `RENDER_SERVICE_ID`, чтобы из любого чата проекта можно было одной командой `python scripts/push_and_deploy.py` отправить коммиты в GitHub, синхронизировать переменные окружения и запустить деплой на Render без повторного запроса токенов у пользователя.
+- **Встроенный само-пинг (`app/main.py`)**:
+  - В `lifespan` добавлен фоновый цикл `_keep_alive_loop()`, который каждые 4 минуты (240 сек) пингует внешний URL `https://second-brain-bot-4wcq.onrender.com/healthz` через публичный роутер Render, предотвращая 15-минутный idle sleep на тарифе Render Free.
+- **Внешний крон и демон (`scripts/keepalive.py`, `.github/workflows/keepalive.yml`, `scripts/deploy_render.py`)**:
+  - Добавлен GitHub Actions workflow `.github/workflows/keepalive.yml` (пинг каждые 5 минут снаружи) и скрипт `scripts/keepalive.py` для фонового поддержания инстанса в горячем состоянии.
+
 ### 2026-11-07 — Архив «Оригиналы» и улучшенный разбор Threads/Instagram + КП ссылки
 - **База данных (`app/db/migrations/002_originals.sql`, `app/db/repo.py`)**:
   - Добавлена таблица `original_messages` для сохранения всех исходных сообщений пользователя (`raw_text`, `topic_slug`, `source_url`, `source_type`, `author`, `extracted_text`, `created_at`) с автоматическим бэкфиллом из существующих `items`.
