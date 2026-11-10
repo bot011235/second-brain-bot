@@ -69,6 +69,9 @@ class DummyTG:
         self.deleted.append(message_id)
         return {"ok": True}
 
+    def set_message_reaction(self, chat_id: int, message_id: int, emoji: str = "👍") -> dict[str, Any]:
+        return {"ok": True}
+
     def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> dict[str, Any]:
         return {"ok": True}
 

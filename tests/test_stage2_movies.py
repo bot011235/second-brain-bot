@@ -84,6 +84,9 @@ class DummyTG:
         self.deleted.append(message_id)
         return {"ok": True}
 
+    def set_message_reaction(self, chat_id: int, message_id: int, emoji: str = "👍") -> dict[str, Any]:
+        return {"ok": True}
+
     def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> dict[str, Any]:
         return {"ok": True}
 
@@ -124,7 +127,9 @@ class TestStage2Movies(unittest.TestCase):
         res1 = handle_update(conn, upd1, tg=tg, tmdb=tmdb)  # type: ignore[arg-type]
         self.assertEqual(res1["status"], "needs_choice")
         item_id = res1["item_id"]
-        self.assertIn("найдено несколько вариантов", tg.sent[-1]["text"])
+        item_choice = get_item(conn, item_id)
+        assert item_choice is not None
+        self.assertEqual(item_choice["processing_status"], "needs_choice")
 
         # 2. Пользователь нажимает кнопку 1-го кандидата (Severance 2022)
         cb = {

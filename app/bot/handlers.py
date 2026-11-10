@@ -105,21 +105,15 @@ def _publish_and_replace(
     thread_id: int | None,
     user_msg_id: int | None,
 ) -> None:
-    card_html = render_card_html(item)
-    keyboard = build_item_keyboard(item)
-    if chat_id and settings.telegram_bot_token:
-        sent = tg.send_message(
-            chat_id,
-            card_html,
-            message_thread_id=thread_id,
-            reply_markup=keyboard,
-        )
-        new_msg_id = sent.get("result", {}).get("message_id")
-        if new_msg_id:
-            repo.set_item_tg_message_id(conn, item["id"], int(new_msg_id))
-            item["tg_message_id"] = int(new_msg_id)
-        if user_msg_id:
-            tg.delete_message(chat_id, int(user_msg_id))
+    # Сохраняем user_msg_id как tg_message_id, чтобы ссылка "В чате" вела на сообщение пользователя
+    if user_msg_id:
+        repo.set_item_tg_message_id(conn, item["id"], int(user_msg_id))
+        item["tg_message_id"] = int(user_msg_id)
+        if chat_id and settings.telegram_bot_token:
+            try:
+                tg.set_message_reaction(chat_id, int(user_msg_id), "👍")
+            except Exception:
+                pass
 
 
 def _resolve_original_topic_slug(topic_name: str, category: str) -> str:
@@ -203,14 +197,11 @@ def _handle_movie_text(
         )
         if existing:
             repo.add_source_to_item(conn, existing["id"], source_url=source_url, source_type=source_type, raw_text=text)
-            if chat_id and settings.telegram_bot_token:
-                if user_msg_id:
-                    tg.delete_message(chat_id, int(user_msg_id))
-                tg.send_message(
-                    chat_id,
-                    f"🔁 Уже в базе: <b>{existing.get('title_ru')}</b>",
-                    message_thread_id=thread_id,
-                )
+            if chat_id and user_msg_id and settings.telegram_bot_token:
+                try:
+                    tg.set_message_reaction(chat_id, int(user_msg_id), "👍")
+                except Exception:
+                    pass
             return {"status": "duplicate_item", "item_id": existing["id"]}
 
         item = repo.create_item(
@@ -293,14 +284,11 @@ def _handle_book_text(
         )
         if existing:
             repo.add_source_to_item(conn, existing["id"], source_url=source_url, source_type=source_type, raw_text=text)
-            if chat_id and settings.telegram_bot_token:
-                if user_msg_id:
-                    tg.delete_message(chat_id, int(user_msg_id))
-                tg.send_message(
-                    chat_id,
-                    f"🔁 Уже в базе: <b>{existing.get('title_ru')}</b>",
-                    message_thread_id=thread_id,
-                )
+            if chat_id and user_msg_id and settings.telegram_bot_token:
+                try:
+                    tg.set_message_reaction(chat_id, int(user_msg_id), "👍")
+                except Exception:
+                    pass
             return {"status": "duplicate_item", "item_id": existing["id"]}
 
         item = repo.create_item(
@@ -382,7 +370,10 @@ def _handle_message(
                 for line in lines
             ]
             if chat_id and msg_id and settings.telegram_bot_token:
-                tg.delete_message(chat_id, int(msg_id))
+                try:
+                    tg.set_message_reaction(chat_id, int(msg_id), "👍")
+                except Exception:
+                    pass
             return {"status": "batch_created", "count": len(results), "results": results}
         return _handle_movie_text(conn, lines[0] if lines else text, chat_id, thread_id, msg_id, tg, tmdb=tmdb)
 
@@ -404,7 +395,10 @@ def _handle_message(
                 for line in lines
             ]
             if chat_id and msg_id and settings.telegram_bot_token:
-                tg.delete_message(chat_id, int(msg_id))
+                try:
+                    tg.set_message_reaction(chat_id, int(msg_id), "👍")
+                except Exception:
+                    pass
             return {"status": "batch_created", "count": len(results), "results": results}
         return _handle_book_text(conn, lines[0] if lines else text, chat_id, thread_id, msg_id, tg, books_client=books_client)
 
@@ -461,14 +455,11 @@ def _handle_message(
                     source_type=source_type,
                     raw_text=raw_desc or text,
                 )
-                if chat_id and settings.telegram_bot_token:
-                    if msg_id:
-                        tg.delete_message(chat_id, int(msg_id))
-                    tg.send_message(
-                        chat_id,
-                        f"🔁 Уже в базе: <b>{existing_url_item.get('title_ru')}</b>",
-                        message_thread_id=thread_id,
-                    )
+                if chat_id and msg_id and settings.telegram_bot_token:
+                    try:
+                        tg.set_message_reaction(chat_id, int(msg_id), "👍")
+                    except Exception:
+                        pass
                 return {"status": "duplicate_item", "item_id": existing_url_item["id"]}
 
         llm = GroqLLMClient()
@@ -508,7 +499,10 @@ def _handle_message(
                         )
                     results.append(r)
                 if chat_id and msg_id and settings.telegram_bot_token:
-                    tg.delete_message(chat_id, int(msg_id))
+                    try:
+                        tg.set_message_reaction(chat_id, int(msg_id), "👍")
+                    except Exception:
+                        pass
                 return {"status": "collection_extracted", "count": len(results), "results": results}
             # Если из ссылки не удалось извлечь ни одного фильма/книги, сохраняем как пост/статью/видео
             category = "post" if source_type in ("threads", "instagram") else ("video" if source_type == "youtube" else "article")

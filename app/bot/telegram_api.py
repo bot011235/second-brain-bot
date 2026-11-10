@@ -67,3 +67,18 @@ class TelegramClient:
 
     def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> dict[str, Any]:
         return self._post("answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
+
+    def set_message_reaction(
+        self,
+        chat_id: int,
+        message_id: int,
+        emoji: str = "👍",
+    ) -> dict[str, Any]:
+        return self._post(
+            "setMessageReaction",
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reaction": [{"type": "emoji", "emoji": emoji}],
+            },
+        )

@@ -254,19 +254,6 @@ def api_delete_original(
         if not res:
             raise HTTPException(status_code=404, detail="Not found")
         deleted_items = res.get("deleted_items") or []
-        if settings.tg_chat_id and settings.telegram_bot_token:
-            tg = TelegramClient()
-            msg_ids: set[int] = set()
-            if res.get("tg_message_id"):
-                msg_ids.add(int(res["tg_message_id"]))
-            for it in deleted_items:
-                if it.get("tg_message_id"):
-                    msg_ids.add(int(it["tg_message_id"]))
-            for mid in msg_ids:
-                try:
-                    tg.delete_message(settings.tg_chat_id, mid)
-                except Exception:
-                    pass
         return {
             "status": "deleted",
             "id": orig_id,
@@ -307,18 +294,6 @@ def api_patch_item(
         )
         if not updated:
             raise HTTPException(status_code=404, detail="Not found")
-
-        # Синхронизируем изменение статуса с карточкой в Telegram
-        if settings.tg_chat_id and settings.telegram_bot_token and updated.get("tg_message_id"):
-            try:
-                TelegramClient().edit_message_text(
-                    settings.tg_chat_id,
-                    int(updated["tg_message_id"]),
-                    render_card_html(updated),
-                    reply_markup=build_item_keyboard(updated),
-                )
-            except Exception:
-                pass
         return updated
     finally:
         conn.close()
@@ -335,11 +310,6 @@ def api_delete_item(
         if not item:
             raise HTTPException(status_code=404, detail="Not found")
         repo.delete_item(conn, item_id)
-        if settings.tg_chat_id and settings.telegram_bot_token and item.get("tg_message_id"):
-            try:
-                TelegramClient().delete_message(settings.tg_chat_id, int(item["tg_message_id"]))
-            except Exception:
-                pass
         return {"status": "deleted", "id": item_id}
     finally:
         conn.close()

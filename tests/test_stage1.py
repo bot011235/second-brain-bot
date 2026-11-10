@@ -20,6 +20,7 @@ class DummyTelegramClient:
         self.sent: list[dict[str, Any]] = []
         self.edited: list[dict[str, Any]] = []
         self.deleted: list[int] = []
+        self.reactions: list[dict[str, Any]] = []
 
     def send_message(
         self,
@@ -47,6 +48,10 @@ class DummyTelegramClient:
 
     def delete_message(self, chat_id: int, message_id: int) -> dict[str, Any]:
         self.deleted.append(message_id)
+        return {"ok": True}
+
+    def set_message_reaction(self, chat_id: int, message_id: int, emoji: str = "👍") -> dict[str, Any]:
+        self.reactions.append({"chat_id": chat_id, "message_id": message_id, "emoji": emoji})
         return {"ok": True}
 
     def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> dict[str, Any]:
@@ -83,8 +88,8 @@ class TestStage1(unittest.TestCase):
         self.assertEqual(res["status"], "created")
         item_id = res["item_id"]
         self.assertEqual(res["category"], "idea")
-        self.assertEqual(len(tg.sent), 1)
-        self.assertEqual(tg.deleted, [55])
+        self.assertEqual(tg.reactions, [{"chat_id": -100111, "message_id": 55, "emoji": "👍"}])
+        self.assertEqual(tg.deleted, [])
 
         # Повторный webhook с тем же update_id игнорируется (идемпотентность)
         dup = handle_update(conn, upd, tg=tg)  # type: ignore[arg-type]
