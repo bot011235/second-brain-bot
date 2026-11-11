@@ -336,10 +336,21 @@
       return;
     }
 
-    // Выводим жанры/теги в горизонтальную прокручиваемую карусель (на телефоне и ПК)
-    const maxInline = 25;
-    const inlineTags = sorted.slice(0, maxInline);
-    const overflowTags = sorted.slice(maxInline);
+    // Адаптивное число видимых тегов для веба и мобильных (на телефоне 7, на десктопе 12)
+    const isMobile = window.innerWidth <= 640;
+    const maxInline = isMobile ? 7 : 12;
+
+    let inlineTags = sorted.slice(0, maxInline);
+    let overflowTags = sorted.slice(maxInline);
+
+    // Если активный тег попал в overflow, поднимаем его в inline, чтобы он был наглядно виден
+    if (state.tag && !inlineTags.some((t) => t.tag === state.tag)) {
+      const activeIdx = overflowTags.findIndex((t) => t.tag === state.tag);
+      if (activeIdx !== -1) {
+        const [activeItem] = overflowTags.splice(activeIdx, 1);
+        inlineTags.push(activeItem);
+      }
+    }
 
     let html = `<button class="chip ${state.tag === "" ? "active" : ""}" data-tag="">Все жанры/теги</button>`;
     inlineTags.forEach((t) => {
@@ -721,7 +732,9 @@
   document.getElementById("tagBar").addEventListener("click", (e) => {
     const btn = e.target.closest(".chip");
     if (!btn) return;
-    state.tag = btn.dataset.tag || "";
+    const clickedTag = btn.dataset.tag || "";
+    // Повторный клик по активному тегу снимает фильтр
+    state.tag = state.tag === clickedTag && clickedTag !== "" ? "" : clickedTag;
     renderTagBar();
     loadItems();
   });

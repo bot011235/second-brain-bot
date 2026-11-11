@@ -280,7 +280,7 @@ body {
   font-size: 12px;
   cursor: pointer;
   flex-shrink: 0;
-  margin-left: auto;
+  margin-left: 2px;
 }
 
 .more-tags-select.active {

@@ -61,7 +61,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Personal DB — Второй мозг",
+    title="Personal DB — Notes",
     version="0.2.1",
     lifespan=lifespan,
     docs_url=None,

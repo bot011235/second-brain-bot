@@ -170,6 +170,31 @@ class TestStage2Movies(unittest.TestCase):
         self.assertEqual(res3["status"], "duplicate_item")
         self.assertEqual(res3["item_id"], item_id)
 
+    def test_title_orig_and_parentheses_search(self) -> None:
+        from app.pipeline.movies import search_movie_candidates, is_unambiguous_match
+
+        class MockTMDB:
+            is_configured = True
+            def search_candidates(self, query: str, year: int | None = None, limit: int = 3):
+                if query.lower() == "hollow trees":
+                    return [{
+                        "source": "tmdb",
+                        "tmdb_id": 9999,
+                        "media_type": "movie",
+                        "category": "movie",
+                        "title_ru": "Полые деревья",
+                        "title_orig": "Hollow Trees",
+                        "release_year": 2026,
+                    }]
+                return []
+
+        mock = MockTMDB()
+        # Поиск с скобками 'Полые деревья (Hollow Trees)' находит фильм по оригинальному названию
+        cands = search_movie_candidates("Полые деревья (Hollow Trees)", year=2026, tmdb=mock)  # type: ignore[arg-type]
+        self.assertEqual(len(cands), 1)
+        self.assertEqual(cands[0]["title_orig"], "Hollow Trees")
+        self.assertTrue(is_unambiguous_match("Полые деревья", 2026, cands, title_orig="Hollow Trees"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

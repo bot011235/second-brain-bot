@@ -56,6 +56,7 @@ def search_movie_candidates(
     year: int | None = None,
     tmdb: TMDBClient | None = None,
     limit: int = 3,
+    title_orig: str | None = None,
 ) -> list[dict[str, Any]]:
     """Ищет кандидатов через официальный TMDB API, а если ключ не задан — через официальный Wikidata API."""
     tmdb = tmdb or TMDBClient()
@@ -76,19 +77,73 @@ def search_movie_candidates(
                 found_by_kp["kp_id"] = int(direct["kp_id"])
                 return [found_by_kp]
 
+    # Извлечение оригинального названия из скобок, если есть: 'Полые деревья (Hollow Trees)'
+    match_paren = re.search(r"\(([^)]+)\)", query)
+    paren_title = match_paren.group(1).strip() if match_paren else None
+    clean_query = re.sub(r"\([^)]+\)", "", query).strip() or query
+    if not title_orig and paren_title and re.search(r"[a-zA-Z]", paren_title):
+        title_orig = paren_title
+
+    queries_to_try: list[tuple[str, int | None]] = []
+    # 1. Основной запрос с годом
+    queries_to_try.append((clean_query, year))
+    # 2. Оригинальное название с годом
+    if title_orig and title_orig.strip().lower() != clean_query.lower():
+        queries_to_try.append((title_orig.strip(), year))
+    # 3. Подзаголовки через точку/двоеточие/тире ('Дримквилл. Корпорация мечты' -> 'Дримквилл')
+    for sep in [".", ":", " — ", " - "]:
+        if sep in clean_query:
+            prefix = clean_query.split(sep)[0].strip()
+            if len(prefix) >= 3 and prefix.lower() != clean_query.lower():
+                queries_to_try.append((prefix, year))
+    # 4. Без года, если год был указан (часто релизы сдвигаются)
+    if year is not None:
+        queries_to_try.append((clean_query, None))
+        if title_orig and title_orig.strip().lower() != clean_query.lower():
+            queries_to_try.append((title_orig.strip(), None))
+
     if tmdb.is_configured:
-        candidates = tmdb.search_candidates(query, year=year, limit=limit)
-        if candidates:
-            return candidates
-    return search_wikidata_movies(query, year=year, limit=limit)
+        seen_ids: set[tuple[str, int]] = set()
+        for q, yr in queries_to_try:
+            candidates = tmdb.search_candidates(q, year=yr, limit=limit)
+            if candidates:
+                unique = []
+                for c in candidates:
+                    key = (c.get("media_type", "movie"), c.get("tmdb_id") or 0)
+                    if key not in seen_ids:
+                        seen_ids.add(key)
+                        unique.append(c)
+                if unique:
+                    return unique
+
+    candidates = search_wikidata_movies(clean_query, year=year, limit=limit)
+    if not candidates and title_orig:
+        candidates = search_wikidata_movies(title_orig, year=year, limit=limit)
+    return candidates
 
 
-def is_unambiguous_match(query: str, year: int | None, candidates: list[dict[str, Any]]) -> bool:
-    """Автовыбор срабатывает только если кандидат ровно один или явно указан год и есть точное совпадение."""
+def is_unambiguous_match(
+    query: str,
+    year: int | None,
+    candidates: list[dict[str, Any]],
+    title_orig: str | None = None,
+) -> bool:
+    """Автовыбор срабатывает только если кандидат ровно один, либо есть точное совпадение по title_orig/году."""
     if not candidates:
         return False
     if len(candidates) == 1:
         return True
+
+    # Если есть оригинальное название на латинице (например 'Hollow Trees' или 'DreamQuil')
+    if title_orig:
+        norm_orig = normalize_text(title_orig)
+        exact_orig = [c for c in candidates if normalize_text(c.get("title_orig")) == norm_orig]
+        if len(exact_orig) == 1:
+            candidates.remove(exact_orig[0])
+            candidates.insert(0, exact_orig[0])
+            return True
+
+    # Если явно указан год и есть ровно одно совпадение по названию и году
     if year is not None:
         norm_q = normalize_text(query)
         exact = [
@@ -98,10 +153,10 @@ def is_unambiguous_match(query: str, year: int | None, candidates: list[dict[str
             and (normalize_text(c.get("title_ru")) == norm_q or normalize_text(c.get("title_orig")) == norm_q)
         ]
         if len(exact) == 1:
-            # Перемещаем точное совпадение на 0-ю позицию
             candidates.remove(exact[0])
             candidates.insert(0, exact[0])
             return True
+
     return False
 
 

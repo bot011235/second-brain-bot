@@ -167,15 +167,19 @@ def _handle_movie_text(
     tmdb: TMDBClient | None = None,
     source_url: str | None = None,
     source_type: str = "manual",
+    title_orig: str | None = None,
 ) -> dict[str, Any]:
     query, year = movies_pipeline.parse_title_and_year(text)
-    candidates = movies_pipeline.search_movie_candidates(query, year=year, tmdb=tmdb, limit=3)
+    candidates = movies_pipeline.search_movie_candidates(
+        query, year=year, tmdb=tmdb, limit=3, title_orig=title_orig
+    )
 
     if not candidates:
         item = repo.create_item(
             conn,
             category="movie",
             title_ru=query,
+            title_orig=title_orig,
             release_year=year,
             raw_input=text,
             processing_status="needs_input",
@@ -186,7 +190,7 @@ def _handle_movie_text(
         _publish_and_replace(conn, tg, item, chat_id, thread_id, user_msg_id)
         return {"status": "needs_input", "item_id": item["id"]}
 
-    if movies_pipeline.is_unambiguous_match(query, year, candidates):
+    if movies_pipeline.is_unambiguous_match(query, year, candidates, title_orig=title_orig):
         enriched = movies_pipeline.enrich_candidate(candidates[0], tmdb=tmdb)
         existing = repo.find_existing_movie(
             conn,
@@ -472,7 +476,10 @@ def _handle_message(
             if extracted:
                 results = []
                 for entry in extracted:
-                    q_str = f"{entry['title']} {entry['year']}" if entry.get("year") else str(entry["title"])
+                    t_title = entry.get("title")
+                    t_orig = entry.get("title_orig")
+                    t_year = entry.get("year")
+                    q_str = f"{t_title} {t_year}" if t_year else str(t_title)
                     if topic_name == "movies":
                         r = _handle_movie_text(
                             conn,
@@ -484,6 +491,7 @@ def _handle_message(
                             tmdb=tmdb,
                             source_url=canonical_url,
                             source_type=source_type,
+                            title_orig=t_orig,
                         )
                     else:
                         r = _handle_book_text(
