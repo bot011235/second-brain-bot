@@ -373,8 +373,8 @@
     globe: `<svg class="svc-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`,
   };
 
-  function buildSourceBadgeHtml(url, index = null) {
-    if (!url) return "";
+  function resolveSourceVisual(url) {
+    if (!url) return null;
     let domain = "";
     try {
       const u = new URL(url);
@@ -418,13 +418,31 @@
       label = "Википедия";
     }
 
-    if (index != null) {
-      label += ` ${index}`;
-    }
+    return {
+      iconHtml,
+      label,
+      safeUrl: escapeHtml(url),
+      safeLabel: escapeHtml(label),
+    };
+  }
 
-    const safeUrl = escapeHtml(url);
-    const safeLabel = escapeHtml(label);
-    return `<a class="rating-badge source-badge" href="${safeUrl}" target="_blank" rel="noopener noreferrer" title="${safeLabel}: ${safeUrl}">${iconHtml}<span>${safeLabel}</span></a>`;
+  function buildSourceBadgeHtml(url, index = null) {
+    const visual = resolveSourceVisual(url);
+    if (!visual) return "";
+    const labelText = index != null ? `${visual.safeLabel} ${index}` : visual.safeLabel;
+    return `<a class="rating-badge source-badge" href="${visual.safeUrl}" target="_blank" rel="noopener noreferrer" title="${labelText}: ${visual.safeUrl}">${visual.iconHtml}<span>${labelText}</span></a>`;
+  }
+
+  function getPrimarySourceUrl(item) {
+    const sources = item.sources || [];
+    const firstWithUrl = sources.find((s) => s.source_url);
+    return (firstWithUrl && firstWithUrl.source_url) || item.canonical_url || "";
+  }
+
+  function buildCornerSourceHtml(item) {
+    const visual = resolveSourceVisual(getPrimarySourceUrl(item));
+    if (!visual) return "";
+    return `<a class="liquid-pill corner-source-pill" href="${visual.safeUrl}" target="_blank" rel="noopener noreferrer" title="${visual.safeLabel}: ${visual.safeUrl}" aria-label="${visual.safeLabel}">${visual.iconHtml}<svg class="corner-ext-arrow" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 11 11 5M6 5h5v5"/></svg></a>`;
   }
 
   const BRAND_BADGES = {
@@ -437,7 +455,7 @@
     wiki: `<span class="brand-wiki">W</span>`,
   };
 
-  function buildRatingsHtml(item, { compact = false } = {}) {
+  function buildRatingsHtml(item, { compact = false, includeSources = true } = {}) {
     const meta = parseMeta(item.meta);
     const badges = [];
 
@@ -493,20 +511,22 @@
       }
     }
 
-    const sources = item.sources || [];
-    const seenUrls = new Set();
-    sources.forEach((s, idx) => {
-      if (s.source_url && !seenUrls.has(s.source_url)) {
-        seenUrls.add(s.source_url);
-        if (!compact || seenUrls.size <= 1) {
-          badges.push(buildSourceBadgeHtml(s.source_url, sources.length > 1 ? idx + 1 : null));
+    if (includeSources) {
+      const sources = item.sources || [];
+      const seenUrls = new Set();
+      sources.forEach((s, idx) => {
+        if (s.source_url && !seenUrls.has(s.source_url)) {
+          seenUrls.add(s.source_url);
+          if (!compact || seenUrls.size <= 1) {
+            badges.push(buildSourceBadgeHtml(s.source_url, sources.length > 1 ? idx + 1 : null));
+          }
         }
-      }
-    });
-    if (item.canonical_url && !seenUrls.has(item.canonical_url)) {
-      seenUrls.add(item.canonical_url);
-      if (!compact || seenUrls.size <= 1) {
-        badges.push(buildSourceBadgeHtml(item.canonical_url, null));
+      });
+      if (item.canonical_url && !seenUrls.has(item.canonical_url)) {
+        seenUrls.add(item.canonical_url);
+        if (!compact || seenUrls.size <= 1) {
+          badges.push(buildSourceBadgeHtml(item.canonical_url, null));
+        }
       }
     }
 
@@ -616,7 +636,7 @@
 
     const chatUrl = buildTelegramMessageLink(item);
     const chatLinkHtml = chatUrl
-      ? `<a class="liquid-pill liquid-chat-link chat-link" href="${escapeHtml(chatUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть оригинал в Telegram">${SVC_ICONS.telegram}<span>В чате</span></a>`
+      ? `<a class="liquid-pill liquid-chat-link chat-link" href="${escapeHtml(chatUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть в чате Telegram" aria-label="Открыть в чате Telegram">${SVC_ICONS.telegram}</a>`
       : "";
 
     const delBtnHtml = `<button type="button" class="liquid-pill liquid-delete-btn delete-btn" data-action="delete" data-id="${item.id}" title="Удалить запись" aria-label="Удалить запись">${UI_ICONS.trash}</button>`;
@@ -704,13 +724,13 @@
 
     const meta = parseMeta(item.meta);
     const subParts = [];
-    if (item.creator) subParts.push(`👤 ${escapeHtml(item.creator)}`);
+    if (shouldShowCreator(item)) subParts.push(`👤 ${escapeHtml(item.creator)}`);
     if (item.category === "series" && meta.seasons_count) {
       subParts.push(`📺 Сезонов: ${Number(meta.seasons_count)}`);
     }
     const creatorHtml = subParts.length ? `<div class="drawer-creator">${subParts.join(" · ")}</div>` : "";
 
-    const ratingsHtml = buildRatingsHtml(item, { compact: false });
+    const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: true });
     const allTags = [...(item.genres || []), ...(item.tags || [])];
     const tagsHtml = allTags.length
       ? `
@@ -1055,6 +1075,14 @@
     if (mob) mob.textContent = String(shortCount);
   }
 
+  function shouldShowCreator(item) {
+    if (!item || !item.creator) return false;
+    const cat = (item.category || "").toLowerCase();
+    if (cat === "post" || cat === "idea") return false;
+    if (String(item.creator).trim().startsWith("@")) return false;
+    return true;
+  }
+
   function renderListRow(item) {
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     const catClass = `cat-${escapeHtml(item.category || "idea")}`;
@@ -1070,11 +1098,12 @@
 
     const meta = parseMeta(item.meta);
     const subParts = [];
-    if (item.creator) subParts.push(escapeHtml(item.creator));
+    if (shouldShowCreator(item)) subParts.push(escapeHtml(item.creator));
     if (item.category === "series" && meta.seasons_count) {
       subParts.push(`Сезонов: ${Number(meta.seasons_count)}`);
     }
-    const ratingsHtml = buildRatingsHtml(item, { compact: true });
+    const ratingsHtml = buildRatingsHtml(item, { compact: true, includeSources: false });
+    const cornerSourceHtml = buildCornerSourceHtml(item);
     const desktopActionsHtml = buildCardActionsHtml(item, "list-actions");
     const mobileActionsHtml = buildCardActionsHtml(item);
 
@@ -1082,19 +1111,22 @@
       <article class="list-row cat-accent ${catClass}" data-open-id="${item.id}">
         <div class="list-poster">${posterHtml}</div>
         <div class="list-main">
-          <div class="list-title-line">
-            <span class="list-title">${escapeHtml(item.title_ru)}</span>
-            ${yearHtml}
-            ${origHtml}
+          <div class="list-head-row">
+            <div class="list-title-line">
+              <span class="list-title">${escapeHtml(item.title_ru)}</span>
+              ${yearHtml}
+              ${origHtml}
+            </div>
+            ${cornerSourceHtml}
           </div>
           ${subParts.length ? `<div class="list-subline">${subParts.join(" · ")}</div>` : ""}
           ${ratingsHtml ? `<div class="list-ratings">${ratingsHtml}</div>` : ""}
-          <div class="list-mobile-footer">
-            ${mobileActionsHtml}
-          </div>
         </div>
         <div class="list-right">
           ${desktopActionsHtml}
+        </div>
+        <div class="list-mobile-footer">
+          ${mobileActionsHtml}
         </div>
       </article>
     `;
@@ -1115,7 +1147,7 @@
     const yearStr = item.release_year ? ` (${item.release_year})` : "";
     const meta = parseMeta(item.meta);
     const subParts = [];
-    if (item.creator) subParts.push(`👤 ${escapeHtml(item.creator)}`);
+    if (shouldShowCreator(item)) subParts.push(`👤 ${escapeHtml(item.creator)}`);
     if (item.category === "series" && meta.seasons_count) {
       subParts.push(`📺 Сезонов: ${Number(meta.seasons_count)}`);
     }
@@ -1129,16 +1161,21 @@
       : "";
 
     const summaryHtml = item.summary ? `<div class="summary-text">${escapeHtml(item.summary)}</div>` : "";
+    const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
+    const cornerSourceHtml = buildCornerSourceHtml(item);
 
     return `
       <article class="item-card cat-accent ${catClass}" data-open-id="${item.id}">
         <div class="card-top">
           <div class="poster-box">${posterHtml}</div>
           <div class="card-info">
-            <div class="card-title">${escapeHtml(item.title_ru)}${yearStr}</div>
+            <div class="card-head-row">
+              <div class="card-title">${escapeHtml(item.title_ru)}${yearStr}</div>
+              ${cornerSourceHtml}
+            </div>
             ${origLine}
             ${creatorLine}
-            <div class="ratings-bar">${buildRatingsHtml(item, { compact: false })}</div>
+            ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
           </div>
         </div>
         ${genresHtml}
@@ -1157,15 +1194,19 @@
       ? `<img src="${escapeHtml(item.poster_url)}" alt="" loading="lazy" />`
       : `<span>${emoji}</span>`;
     const yearStr = item.release_year ? ` (${item.release_year})` : "";
-    const ratingsHtml = buildRatingsHtml(item, { compact: true });
+    const ratingsHtml = buildRatingsHtml(item, { compact: true, includeSources: false });
+    const cornerSourceHtml = buildCornerSourceHtml(item);
 
     return `
       <article class="kanban-card cat-accent ${catClass}" data-open-id="${item.id}">
         <div class="kanban-card-top">
           <div class="kanban-poster">${posterHtml}</div>
           <div class="kanban-card-meta">
-            <div class="list-title" style="font-size:14.5px;">${escapeHtml(item.title_ru)}${yearStr}</div>
-            ${item.creator ? `<div class="list-subline" style="font-size:12px;">${escapeHtml(item.creator)}</div>` : ""}
+            <div class="card-head-row">
+              <div class="list-title" style="font-size:14.5px;">${escapeHtml(item.title_ru)}${yearStr}</div>
+              ${cornerSourceHtml}
+            </div>
+            ${shouldShowCreator(item) ? `<div class="list-subline" style="font-size:12px;">${escapeHtml(item.creator)}</div>` : ""}
           </div>
         </div>
         ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}

@@ -663,6 +663,41 @@ html[data-theme="dark"] .cat-post {
   gap: 3px;
 }
 
+.list-head-row,
+.card-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.list-head-row > .list-title-line,
+.card-head-row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.liquid-pill.corner-source-pill {
+  height: 24px;
+  padding: 0 7px;
+  gap: 3px;
+  flex-shrink: 0;
+  text-decoration: none;
+  color: var(--text-secondary);
+  margin-top: 1px;
+}
+
+.liquid-pill.corner-source-pill:hover {
+  color: var(--accent);
+}
+
+.corner-source-pill .corner-ext-arrow {
+  opacity: 0.65;
+  flex-shrink: 0;
+}
+
 .list-title-line {
   display: flex;
   align-items: baseline;
@@ -1343,9 +1378,12 @@ html[data-theme="dark"] .cat-post {
 
 .chat-link,
 .liquid-chat-link {
-  padding: 5px 10px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  justify-content: center;
   text-decoration: none;
-  white-space: nowrap;
+  flex-shrink: 0;
   color: var(--tg-color);
   background: var(--tg-bg);
   border-color: var(--tg-border);
@@ -1408,8 +1446,9 @@ html[data-theme="dark"] .cat-post {
 
 .card-actions.kanban-actions .chat-link,
 .card-actions.kanban-actions .liquid-chat-link {
-  font-size: 12px;
-  padding: 4px 8px;
+  width: 27px;
+  height: 27px;
+  padding: 0;
 }
 
 .card-actions.kanban-actions .delete-btn,
@@ -2135,8 +2174,9 @@ html[data-theme="dark"] .cat-post {
 
   .list-row {
     padding: 10px 11px;
-    gap: 11px;
+    gap: 10px;
     align-items: flex-start;
+    flex-wrap: wrap;
   }
 
   .list-right {
@@ -2144,12 +2184,48 @@ html[data-theme="dark"] .cat-post {
   }
 
   .list-mobile-footer {
-    margin-top: 6px;
+    flex: 1 0 100%;
+    width: 100%;
+    margin-top: 2px;
+    padding-top: 7px;
+    border-top: 1px solid var(--border);
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 8px;
+  }
+
+  .list-mobile-footer .card-actions {
+    flex-wrap: nowrap;
+    gap: 5px;
+    width: 100%;
+  }
+
+  .list-mobile-footer .liquid-status-btn {
+    font-size: 12px;
+    padding: 4px 8px 4px 7px;
+    gap: 5px;
+  }
+
+  .list-mobile-footer .user-rating-select {
+    font-size: 12px;
+    padding: 4px 19px 4px 23px;
+  }
+
+  .list-mobile-footer .pill-ico {
+    left: 7px;
+  }
+
+  .list-mobile-footer .pill-chevron {
+    right: 6px;
+  }
+
+  .list-mobile-footer .card-actions-right {
+    gap: 5px;
+  }
+
+  .list-mobile-footer .liquid-chat-link,
+  .list-mobile-footer .liquid-delete-btn {
+    width: 28px;
+    height: 28px;
   }
 
   .drawer-overlay {
