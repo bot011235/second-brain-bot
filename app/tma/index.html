@@ -1,77 +1,232 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-theme="light">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Notes</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=13" />
+  <link rel="stylesheet" href="./styles.css?v=17" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand-row">
-      <div class="brand">
-        <span class="brand-icon">📝</span>
-        <div>
-          <h1>Notes</h1>
-          <p class="subtitle" id="totalCountLabel">Загрузка каталога...</p>
+  <div class="app-shell">
+    <!-- Десктопная боковая навигация (Умная навигация: Сайдбар) -->
+    <aside class="sidebar" id="sidebar" aria-label="Навигация">
+      <div class="sidebar-brand">
+        <span class="brand-emblem">N</span>
+        <div class="brand-meta">
+          <h1 class="brand-title">Notes</h1>
+          <p class="subtitle" id="totalCountLabel">Загрузка...</p>
         </div>
       </div>
-      <div class="header-right">
-        <div class="view-switch" id="viewSwitch">
-          <button class="view-btn active" data-view="catalog">🗂 Каталог</button>
-          <button class="view-btn" data-view="originals">📥 Оригиналы</button>
+
+      <div class="sidebar-section">
+        <div class="sidebar-label">Разделы</div>
+        <div class="sidebar-nav" id="sidebarViewSwitch">
+          <button type="button" class="nav-btn active" data-view="catalog">
+            <span class="nav-ico" data-icon="library"></span>
+            <span>Каталог</span>
+          </button>
+          <button type="button" class="nav-btn" data-view="originals">
+            <span class="nav-ico" data-icon="inbox"></span>
+            <span>Оригиналы</span>
+          </button>
         </div>
-        <button class="refresh-btn" id="refreshBtn" title="Обновить">↻</button>
-        <button class="logout-btn" id="logoutBtn" title="Выйти / Сменить пароль">🚪</button>
       </div>
-    </div>
 
-    <!-- Табы категорий (1 компактная строка) -->
-    <nav class="tabs" id="categoryTabs">
-      <button class="tab active" data-tab="">Все</button>
-      <button class="tab" data-tab="movies">🎬 Кино и сериалы</button>
-      <button class="tab" data-tab="books">📚 Книги</button>
-      <button class="tab" data-tab="video">▶️ YouTube</button>
-      <button class="tab" data-tab="article">📰 Статьи</button>
-      <button class="tab" data-tab="ideas">💡 Идеи и посты</button>
-    </nav>
-
-    <!-- Поиск + Раскрывающиеся списки Статуса и Сортировки в 1 строку -->
-    <div class="controls-row">
-      <div class="search-wrap">
-        <span class="search-icon">🔎</span>
-        <input type="search" id="searchInput" placeholder="Поиск по названию, автору, описанию..." />
+      <div class="sidebar-section">
+        <div class="sidebar-label">Категории</div>
+        <nav class="sidebar-nav" id="sidebarCategoryTabs">
+          <button type="button" class="nav-btn active" data-tab="">
+            <span class="cat-dot cat-dot-all"></span>
+            <span>Все записи</span>
+          </button>
+          <button type="button" class="nav-btn" data-tab="movies">
+            <span class="cat-dot cat-dot-movie"></span>
+            <span>🎬 Кино и сериалы</span>
+          </button>
+          <button type="button" class="nav-btn" data-tab="books">
+            <span class="cat-dot cat-dot-book"></span>
+            <span>📚 Книги</span>
+          </button>
+          <button type="button" class="nav-btn" data-tab="video">
+            <span class="cat-dot cat-dot-video"></span>
+            <span>▶️ YouTube</span>
+          </button>
+          <button type="button" class="nav-btn" data-tab="article">
+            <span class="cat-dot cat-dot-article"></span>
+            <span>📰 Статьи</span>
+          </button>
+          <button type="button" class="nav-btn" data-tab="ideas">
+            <span class="cat-dot cat-dot-idea"></span>
+            <span>💡 Идеи и посты</span>
+          </button>
+        </nav>
       </div>
-      <select id="statusFilterSelect" class="control-select" title="Фильтр по статусу">
-        <option value="all">Все статусы</option>
-        <option value="inbox">📥 Входящие</option>
-        <option value="planned">📌 В планах</option>
-        <option value="in_progress">▶️ В процессе</option>
-        <option value="done">✅ Готово</option>
-        <option value="dropped">🚫 Брошено</option>
-      </select>
-      <select id="sortSelect" class="control-select" title="Сортировка">
-        <option value="created">По дате ↓</option>
-        <option value="imdb">IMDb / Goodreads ↓</option>
-        <option value="kp">КП / FantLab ↓</option>
-        <option value="rt">Rotten Tomatoes ↓</option>
-        <option value="user">Моя оценка ↓</option>
-      </select>
-    </div>
 
-    <!-- Строго 1 строка популярных жанров/тегов по убыванию + раскрывающийся список остальных в конце -->
-    <div class="tags-single-line" id="tagBar"></div>
-  </header>
+      <div class="sidebar-footer">
+        <button type="button" class="sidebar-tool-btn" id="themeToggleDesktop" title="Переключить тему">
+          <span class="nav-ico" id="themeIconDesktop"></span>
+          <span id="themeLabelDesktop">Бумага</span>
+        </button>
+        <div class="sidebar-footer-actions">
+          <button type="button" class="icon-btn" id="refreshBtnDesktop" title="Обновить">
+            <span class="nav-ico" data-icon="refresh"></span>
+          </button>
+          <button type="button" class="icon-btn danger" id="logoutBtnDesktop" title="Выйти / Сменить пароль">
+            <span class="nav-ico" data-icon="logout"></span>
+          </button>
+        </div>
+      </div>
+    </aside>
 
-  <main class="catalog-container">
-    <div id="catalogGrid" class="catalog-grid"></div>
-    <div id="emptyState" class="empty-state hidden">
-      <div class="empty-emoji">🗂</div>
-      <h3>Ничего не найдено</h3>
-      <p>Попробуйте сбросить фильтры или добавьте новую запись через бота в группе <b>Notes📎</b>.</p>
+    <!-- Основная рабочая область -->
+    <div class="workspace">
+      <header class="topbar" id="topbar">
+        <!-- Компактная мобильная строка бренда -->
+        <div class="mobile-brand-row">
+          <div class="brand">
+            <span class="brand-emblem small">N</span>
+            <div>
+              <div class="brand-title-row">
+                <span class="brand-title">Notes</span>
+                <span class="count-pill" id="mobileCountLabel">...</span>
+              </div>
+            </div>
+          </div>
+          <div class="mobile-header-actions">
+            <div class="view-mode-compact" id="viewModeSwitchMobile" title="Режим отображения">
+              <button type="button" class="mode-icon-btn active" data-mode="list" title="Список"><span class="nav-ico" data-icon="list"></span></button>
+              <button type="button" class="mode-icon-btn" data-mode="cards" title="Карточки"><span class="nav-ico" data-icon="grid"></span></button>
+              <button type="button" class="mode-icon-btn" data-mode="kanban" title="Канбан"><span class="nav-ico" data-icon="kanban"></span></button>
+            </div>
+            <button type="button" class="icon-btn" id="themeToggleMobile" title="Сменить тему">
+              <span class="nav-ico" id="themeIconMobile"></span>
+            </button>
+            <button type="button" class="icon-btn" id="refreshBtnMobile" title="Обновить">
+              <span class="nav-ico" data-icon="refresh"></span>
+            </button>
+            <button type="button" class="icon-btn danger" id="logoutBtnMobile" title="Выйти">
+              <span class="nav-ico" data-icon="logout"></span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Панель поиска, фильтров и 3 режимов просмотра -->
+        <div class="controls-row">
+          <div class="search-wrap">
+            <span class="search-icon" data-icon="search"></span>
+            <input type="search" id="searchInput" placeholder="Поиск по названию, автору, описанию..." />
+            <button type="button" id="searchClearBtn" class="search-clear hidden" title="Очистить">✕</button>
+          </div>
+
+          <div class="desktop-controls" id="desktopCatalogControls">
+            <select id="statusFilterSelect" class="control-select" title="Фильтр по статусу">
+              <option value="all">Все статусы</option>
+              <option value="inbox">📥 Входящие</option>
+              <option value="planned">📌 В планах</option>
+              <option value="in_progress">▶️ В процессе</option>
+              <option value="done">✅ Готово</option>
+              <option value="dropped">🚫 Брошено</option>
+            </select>
+
+            <select id="sortSelect" class="control-select" title="Сортировка">
+              <option value="created">По дате ↓</option>
+              <option value="imdb">IMDb / Goodreads ↓</option>
+              <option value="kp">КП / FantLab ↓</option>
+              <option value="rt">Rotten Tomatoes ↓</option>
+              <option value="user">Моя оценка ↓</option>
+            </select>
+
+            <div class="view-mode-switch" id="viewModeSwitchDesktop" role="group" aria-label="Режим отображения">
+              <button type="button" class="mode-btn active" data-mode="list" title="Компактный список">
+                <span class="nav-ico" data-icon="list"></span>
+                <span>Список</span>
+              </button>
+              <button type="button" class="mode-btn" data-mode="cards" title="Сетка карточек">
+                <span class="nav-ico" data-icon="grid"></span>
+                <span>Карточки</span>
+              </button>
+              <button type="button" class="mode-btn" data-mode="kanban" title="Доска по статусам">
+                <span class="nav-ico" data-icon="kanban"></span>
+                <span>Канбан</span>
+              </button>
+            </div>
+          </div>
+
+          <button type="button" class="mobile-filter-chip" id="mobileFilterBtn" title="Фильтры и сортировка">
+            <span class="nav-ico" data-icon="sliders"></span>
+            <span>Фильтры</span>
+            <span class="filter-dot hidden" id="mobileFilterDot"></span>
+          </button>
+        </div>
+
+        <!-- Мобильная строка табов категорий -->
+        <nav class="tabs mobile-tabs" id="mobileCategoryTabs">
+          <button type="button" class="tab active" data-tab="">Все</button>
+          <button type="button" class="tab" data-tab="movies">🎬 Кино</button>
+          <button type="button" class="tab" data-tab="books">📚 Книги</button>
+          <button type="button" class="tab" data-tab="video">▶️ YouTube</button>
+          <button type="button" class="tab" data-tab="article">📰 Статьи</button>
+          <button type="button" class="tab" data-tab="ideas">💡 Идеи</button>
+        </nav>
+
+        <!-- Строка популярных жанров/тегов + выпадающий список остальных -->
+        <div class="tags-single-line" id="tagBar"></div>
+      </header>
+
+      <main class="catalog-container" id="catalogContainer">
+        <div id="catalogGrid" class="catalog-list view-list"></div>
+        <div id="emptyState" class="empty-state hidden">
+          <div class="empty-emoji">📖</div>
+          <h3>Записей не найдено</h3>
+          <p>Попробуйте сбросить фильтры или добавьте новую запись через бота в группе <b>Notes📎</b>.</p>
+        </div>
+      </main>
     </div>
-  </main>
+  </div>
+
+  <!-- Нижняя навигация на мобильных устройствах / TMA (Bottom Bar) -->
+  <nav class="bottom-bar" id="mobileBottomBar" aria-label="Быстрая навигация">
+    <button type="button" class="bottom-btn active" data-view="catalog">
+      <span class="nav-ico" data-icon="library"></span>
+      <span>Каталог</span>
+    </button>
+    <button type="button" class="bottom-btn" data-view="originals">
+      <span class="nav-ico" data-icon="inbox"></span>
+      <span>Оригиналы</span>
+    </button>
+    <button type="button" class="bottom-btn" id="bottomFiltersBtn">
+      <span class="nav-ico" data-icon="sliders"></span>
+      <span>Фильтры</span>
+    </button>
+    <button type="button" class="bottom-btn" id="bottomSearchBtn">
+      <span class="nav-ico" data-icon="search"></span>
+      <span>Поиск</span>
+    </button>
+  </nav>
+
+  <!-- Детальная шторка (Detail Drawer) -->
+  <div id="detailDrawerOverlay" class="drawer-overlay hidden" aria-hidden="true">
+    <aside class="detail-drawer" id="detailDrawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+      <div class="drawer-header">
+        <span class="drawer-eyebrow" id="drawerCategoryLabel">Запись</span>
+        <button type="button" class="icon-btn" id="drawerCloseBtn" title="Закрыть">✕</button>
+      </div>
+      <div class="drawer-body" id="drawerBody"></div>
+    </aside>
+  </div>
+
+  <!-- Мобильная шторка фильтров и сортировки -->
+  <div id="filtersSheetOverlay" class="drawer-overlay hidden" aria-hidden="true">
+    <div class="filters-sheet" id="filtersSheet" role="dialog" aria-modal="true" aria-label="Фильтры и сортировка">
+      <div class="sheet-handle"></div>
+      <div class="drawer-header">
+        <span class="drawer-eyebrow">Фильтры и вид</span>
+        <button type="button" class="icon-btn" id="filtersCloseBtn" title="Закрыть">✕</button>
+      </div>
+      <div class="filters-sheet-body" id="filtersSheetBody"></div>
+    </div>
+  </div>
 
   <!-- Модальное окно авторизации для браузера вне Telegram -->
   <div id="authModal" class="auth-modal-overlay hidden">
@@ -109,6 +264,8 @@
     </div>
   </div>
 
-  <script src="./app.js?v=13"></script>
+  <div id="statusPopover" class="liquid-menu hidden" role="listbox" aria-label="Статус"></div>
+
+  <script src="./app.js?v=17"></script>
 </body>
 </html>

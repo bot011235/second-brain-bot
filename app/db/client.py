@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from app.config import settings
+
+_THREAD_LOCAL = threading.local()
 
 _STMT_SPLIT_RE = re.compile(
     r";\s*(?=(?:[^']*'[^']*')*[^']*$)(?!\s*END\b)",
@@ -126,7 +129,20 @@ class TursoHttpConnection:
             "Authorization": f"Bearer {auth_token.strip()}",
             "Content-Type": "application/json",
         }
-        self._client = httpx.Client(timeout=20.0, headers=self.headers)
+        cache_key = (self.pipeline_url, self.headers["Authorization"])
+        pool: dict[tuple[str, str], httpx.Client] | None = getattr(_THREAD_LOCAL, "clients", None)
+        if pool is None:
+            pool = {}
+            _THREAD_LOCAL.clients = pool
+        client = pool.get(cache_key)
+        if client is None or client.is_closed:
+            client = httpx.Client(
+                timeout=20.0,
+                headers=self.headers,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            )
+            pool[cache_key] = client
+        self._client = client
 
     def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> TursoHttpCursor:
         stmt: dict[str, Any] = {"sql": sql}
@@ -176,7 +192,8 @@ class TursoHttpConnection:
         pass
 
     def close(self) -> None:
-        self._client.close()
+        # Клиент переиспользуется в thread-local пуле для сохранения TLS keep-alive соединения
+        pass
 
 
 def get_connection(db_path_override: str | None = None) -> Any:

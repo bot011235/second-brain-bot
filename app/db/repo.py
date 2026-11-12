@@ -414,9 +414,9 @@ def get_item(conn: Any, item_id: int) -> dict[str, Any] | None:
         return None
 
     tags_cur = conn.execute("SELECT kind, tag FROM item_tags WHERE item_id = ? ORDER BY tag", (item_id,))
-    item["genres"] = [r[1] for r in tags_cur.fetchall() if r[0] == "genre"]
-    tags_cur = conn.execute("SELECT tag FROM item_tags WHERE item_id = ? AND kind = 'tag' ORDER BY tag", (item_id,))
-    item["tags"] = [r[0] for r in tags_cur.fetchall()]
+    tag_rows = tags_cur.fetchall()
+    item["genres"] = [r[1] for r in tag_rows if r[0] == "genre"]
+    item["tags"] = [r[1] for r in tag_rows if r[0] == "tag"]
 
     src_cur = conn.execute(
         "SELECT id, source_url, source_type, raw_text, added_at FROM item_sources WHERE item_id = ? ORDER BY id",
@@ -541,14 +541,61 @@ def list_items_catalog(
     }
     order_sql = sort_map.get(sort, sort_map["created"])
 
-    cur = conn.execute(f"SELECT i.id FROM items i {where_sql} ORDER BY {order_sql} LIMIT ?", (*params, limit))
-    ids = [int(r[0]) for r in cur.fetchall()]
-    out: list[dict[str, Any]] = []
-    for item_id in ids:
-        item = get_item(conn, item_id)
-        if item:
-            out.append(item)
-    return out
+    cols = ", ".join(f"i.{c}" for c in ITEM_COLUMNS)
+    cur = conn.execute(f"SELECT {cols} FROM items i {where_sql} ORDER BY {order_sql} LIMIT ?", (*params, limit))
+    items: list[dict[str, Any]] = []
+    by_id: dict[int, dict[str, Any]] = {}
+    for row in cur.fetchall():
+        item = _row_to_item(row)
+        if not item:
+            continue
+        item["genres"] = []
+        item["tags"] = []
+        item["sources"] = []
+        items.append(item)
+        by_id[int(item["id"])] = item
+
+    if not items:
+        return items
+
+    all_ids = list(by_id.keys())
+    chunk_size = 400
+    for start in range(0, len(all_ids), chunk_size):
+        chunk = all_ids[start : start + chunk_size]
+        placeholders = ", ".join("?" for _ in chunk)
+
+        tags_cur = conn.execute(
+            f"SELECT item_id, kind, tag FROM item_tags WHERE item_id IN ({placeholders}) ORDER BY tag",
+            chunk,
+        )
+        for item_id, kind, tag_val in tags_cur.fetchall():
+            target = by_id.get(int(item_id))
+            if not target:
+                continue
+            if kind == "genre":
+                target["genres"].append(tag_val)
+            elif kind == "tag":
+                target["tags"].append(tag_val)
+
+        src_cur = conn.execute(
+            f"SELECT id, item_id, source_url, source_type, raw_text, added_at "
+            f"FROM item_sources WHERE item_id IN ({placeholders}) ORDER BY id",
+            chunk,
+        )
+        for src_id, item_id, source_url, source_type, raw_text, added_at in src_cur.fetchall():
+            target = by_id.get(int(item_id))
+            if target:
+                target["sources"].append(
+                    {
+                        "id": src_id,
+                        "source_url": source_url,
+                        "source_type": source_type,
+                        "raw_text": raw_text,
+                        "added_at": added_at,
+                    }
+                )
+
+    return items
 
 
 def list_tags_catalog(conn: Any, tab: str | None = None) -> list[dict[str, Any]]:
