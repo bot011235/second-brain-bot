@@ -1386,8 +1386,27 @@ html[data-theme="dark"] .cat-post {
   flex-shrink: 0;
 }
 
+.card-actions.list-actions .liquid-status-btn {
+  width: 128px;
+  min-width: 128px;
+  justify-content: flex-start;
+}
+
+.card-actions.list-actions .liquid-status-btn .pill-st-chev {
+  margin-left: auto;
+}
+
+.card-actions.list-actions .liquid-select-wrap {
+  width: 96px;
+  min-width: 96px;
+}
+
+.card-actions.list-actions .user-rating-select {
+  width: 100%;
+}
+
 .card-actions.list-actions .card-actions-right {
-  margin-left: 0;
+  margin-left: 10px;
 }
 
 .chat-link,
@@ -1473,8 +1492,7 @@ html[data-theme="dark"] .cat-post {
 
 @media (max-width: 1080px) and (min-width: 821px) {
   .card-actions.list-actions {
-    flex-wrap: wrap;
-    max-width: 255px;
+    flex-wrap: nowrap;
   }
 }
 
@@ -2229,11 +2247,24 @@ html[data-theme="dark"] .cat-post {
     font-size: 12px;
     padding: 4px 8px 4px 7px;
     gap: 5px;
+    min-width: 118px;
+    width: 118px;
+    justify-content: flex-start;
+  }
+
+  .list-mobile-footer .liquid-status-btn .pill-st-chev {
+    margin-left: auto;
+  }
+
+  .list-mobile-footer .liquid-select-wrap {
+    min-width: 88px;
+    width: 88px;
   }
 
   .list-mobile-footer .user-rating-select {
     font-size: 12px;
     padding: 4px 19px 4px 23px;
+    width: 100%;
   }
 
   .list-mobile-footer .pill-ico {
