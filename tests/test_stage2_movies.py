@@ -195,6 +195,147 @@ class TestStage2Movies(unittest.TestCase):
         self.assertEqual(cands[0]["title_orig"], "Hollow Trees")
         self.assertTrue(is_unambiguous_match("Полые деревья", 2026, cands, title_orig="Hollow Trees"))
 
+    def test_parse_kinopoisk_share_seo_titles(self) -> None:
+        from app.pipeline.movies import parse_title_and_year
+
+        self.assertEqual(
+            parse_title_and_year(
+                "К востоку от Эдема (сериал, 1 сезон, все серии), 2026 — описание, интересные факты — Кинопоиск\n"
+                "https://www.kinopoisk.ru/series/7865896/"
+            ),
+            ("К востоку от Эдема", 2026),
+        )
+        self.assertEqual(
+            parse_title_and_year(
+                "Дом на другой стороне фильм, 2020, дата выхода трейлеры актеры отзывы описание на Кинопоиске\n"
+                "https://www.kinopoisk.ru/film/1271405/"
+            ),
+            ("Дом на другой стороне", 2020),
+        )
+        self.assertEqual(
+            parse_title_and_year("https://www.kinopoisk.ru/series/891601/\nСлучай в Кеттеринге 2016"),
+            ("Случай в Кеттеринге", 2016),
+        )
+
+    @patch("app.pipeline.movies.resolve_ids_via_wikidata")
+    @patch("app.pipeline.movies.fetch_kp_and_imdb_ratings")
+    def test_multiline_kinopoisk_link_preserves_kp_id_and_source_url(
+        self, mock_ratings: Any, mock_wikidata: Any
+    ) -> None:
+        conn = get_connection(":memory:")
+        apply_migrations(conn)
+        settings.tg_chat_id = -1003531389022
+        settings.allowed_tg_user_id = 349407845
+        settings.topic_movies_id = 3
+        settings.telegram_bot_token = "dummy:token"
+        tg = DummyTG()
+
+        class ShareTMDB:
+            is_configured = True
+
+            def find_by_imdb_id(self, imdb_id: str) -> dict[str, Any] | None:
+                if imdb_id == "tt21097264":
+                    return {
+                        "source": "tmdb",
+                        "tmdb_id": 258165,
+                        "media_type": "tv",
+                        "category": "series",
+                        "title_ru": "К востоку от Эдема",
+                        "title_orig": "East of Eden",
+                        "release_year": 2026,
+                    }
+                return None
+
+            def get_details(self, media_type: str, tmdb_id: int) -> dict[str, Any]:
+                if tmdb_id == 258165:
+                    return {
+                        "tmdb_id": 258165,
+                        "media_type": "tv",
+                        "category": "series",
+                        "title_ru": "К востоку от Эдема",
+                        "title_orig": "East of Eden",
+                        "release_year": 2026,
+                        "summary": "Экранизация романа Стейнбека.",
+                        "poster_url": "https://image.tmdb.org/t/p/w500/eden.jpg",
+                        "genres": ["драма"],
+                        "imdb_id": "tt21097264",
+                    }
+                return {
+                    "tmdb_id": 249597,
+                    "media_type": "tv",
+                    "category": "series",
+                    "title_ru": "Харри Холе",
+                    "title_orig": "Harry Hole",
+                    "release_year": 2026,
+                    "summary": "Криминальный детектив.",
+                    "poster_url": "https://image.tmdb.org/t/p/w500/hole.jpg",
+                    "genres": ["криминал", "триллер"],
+                }
+
+            def search_candidates(self, query: str, year: int | None = None, limit: int = 3) -> list[dict[str, Any]]:
+                if query == "Детектив Холе" and year == 2026:
+                    return [
+                        {
+                            "source": "tmdb",
+                            "tmdb_id": 249597,
+                            "media_type": "tv",
+                            "category": "series",
+                            "title_ru": "Харри Холе",
+                            "title_orig": "Harry Hole",
+                            "release_year": 2026,
+                        }
+                    ]
+                return []
+
+        tmdb = ShareTMDB()
+
+        # 1. Ссылка на 2-й строке резолвится через Wikidata kp_id -> imdb_id -> TMDB и сохраняет source_url
+        mock_wikidata.return_value = {"imdb_id": "tt21097264", "kp_id": 7865896}
+        mock_ratings.return_value = {"rating_kp": None, "rating_imdb": None}
+        upd_eden = {
+            "update_id": 3001,
+            "message": {
+                "message_id": 101,
+                "message_thread_id": 3,
+                "chat": {"id": -1003531389022},
+                "from": {"id": 349407845},
+                "text": (
+                    "К востоку от Эдема (сериал, 1 сезон, все серии), 2026 — описание, интересные факты — Кинопоиск\n"
+                    "https://www.kinopoisk.ru/series/7865896/"
+                ),
+            },
+        }
+        res_eden = handle_update(conn, upd_eden, tg=tg, tmdb=tmdb)  # type: ignore[arg-type]
+        self.assertEqual(res_eden["status"], "created")
+        item_eden = get_item(conn, res_eden["item_id"])
+        assert item_eden is not None
+        self.assertEqual(item_eden["kp_id"], 7865896)
+        self.assertEqual(item_eden["imdb_id"], "tt21097264")
+        self.assertEqual(item_eden["sources"][0]["source_url"], "https://www.kinopoisk.ru/series/7865896/")
+
+        # 2. Если в Wikidata пусто, очистка SEO-хвоста находит в TMDB и сохраняет kp_id со 2-й строки
+        mock_wikidata.return_value = {}
+        upd_hole = {
+            "update_id": 3002,
+            "message": {
+                "message_id": 102,
+                "message_thread_id": 3,
+                "chat": {"id": -1003531389022},
+                "from": {"id": 349407845},
+                "text": (
+                    "Детектив Холе (сериал, 1 сезон, все серии), 2026 — описание, интересные факты — Кинопоиск\n"
+                    "https://www.kinopoisk.ru/series/6399289/"
+                ),
+            },
+        }
+        res_hole = handle_update(conn, upd_hole, tg=tg, tmdb=tmdb)  # type: ignore[arg-type]
+        self.assertEqual(res_hole["status"], "created")
+        item_hole = get_item(conn, res_hole["item_id"])
+        assert item_hole is not None
+        self.assertEqual(item_hole["kp_id"], 6399289)
+        self.assertEqual(item_hole["title_ru"], "Харри Холе")
+        self.assertEqual(item_hole["sources"][0]["source_url"], "https://www.kinopoisk.ru/series/6399289/")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

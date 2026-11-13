@@ -17,7 +17,19 @@ from app.clients.wikidata_kp import (
 from app.db import repo
 from app.utils.normalize import normalize_text
 
-_TRAILING_YEAR_RE = re.compile(r"^(?P<title>.+?)\s*[\(\[]?(?P<year>(?:19|20)\d{2})[\)\]]?\s*$")
+_URL_ONLY_RE = re.compile(r"^https?://\S+$", flags=re.IGNORECASE)
+_INLINE_URL_RE = re.compile(r"https?://\S+", flags=re.IGNORECASE)
+_TRAILING_YEAR_RE = re.compile(r"^(?P<title>.+?)\s*(?:,\s*)?[\(\[]?(?P<year>(?:19|20)\d{2})(?:\s*[–-]\s*(?:(?:19|20)\d{2})?)?[\)\]]?\s*$")
+_SHARE_SITE_SUFFIX_RE = re.compile(
+    r"\s*(?:[—–|-]\s*(?:Кинопоиск|Kinopoisk|IMDb|TMDB|The Movie Database(?:\s*\(TMDB\))?)|на\s+Кинопоиске)\s*$",
+    flags=re.IGNORECASE,
+)
+_KP_SEO_TAIL_RE = re.compile(
+    r"(?:[,—–-]\s*|\s+)(?:описание,\s*интересные факты|дата выхода\s+трейлеры.*|смотреть онлайн.*)$",
+    flags=re.IGNORECASE,
+)
+_KP_PAREN_KIND_RE = re.compile(r"\s*\((?:(?:мини-)?сериал|ТВ|фильм)\b[^)]*\)", flags=re.IGNORECASE)
+_KP_WORD_KIND_SUFFIX_RE = re.compile(r"\s+(?:фильм|(?:мини-)?сериал)\s*$", flags=re.IGNORECASE)
 _IMDB_ID_RE = re.compile(r"(tt\d{6,10})", flags=re.IGNORECASE)
 _KP_URL_RE = re.compile(r"kinopoisk\.ru/(?:film|series)/(\d+)", flags=re.IGNORECASE)
 _TMDB_URL_RE = re.compile(r"themoviedb\.org/(movie|tv)/(\d+)", flags=re.IGNORECASE)
@@ -40,15 +52,36 @@ def parse_direct_media_ids(text: str) -> dict[str, Any]:
 
 
 def parse_title_and_year(raw_text: str) -> tuple[str, int | None]:
-    """Отделяет год в конце строки: 'Дюна 2021' -> ('Дюна', 2021)."""
-    first_line = raw_text.strip().splitlines()[0].strip()
-    m = _TRAILING_YEAR_RE.match(first_line)
+    """Отделяет год и очищает SEO-хвосты браузерного шаринга (Кинопоиск/IMDb/TMDB)."""
+    lines = [ln.strip() for ln in raw_text.strip().splitlines() if ln.strip()]
+    if not lines:
+        return "", None
+    first_line = next((ln for ln in lines if not _URL_ONLY_RE.match(ln)), lines[0])
+    cleaned = _INLINE_URL_RE.sub("", first_line).strip() or first_line
+
+    had_share_seo = False
+    for pattern in (_SHARE_SITE_SUFFIX_RE, _KP_SEO_TAIL_RE, _SHARE_SITE_SUFFIX_RE):
+        updated = pattern.sub("", cleaned).strip(" ,—–-")
+        if updated != cleaned:
+            had_share_seo = True
+            cleaned = updated
+
+    updated_paren = _KP_PAREN_KIND_RE.sub("", cleaned).strip(" ,—–-")
+    if updated_paren != cleaned:
+        had_share_seo = True
+        cleaned = updated_paren
+
+    m = _TRAILING_YEAR_RE.match(cleaned)
     if m:
-        title = m.group("title").strip(" -—–:")
+        title = m.group("title").strip(" ,-—–:")
         year = int(m.group("year"))
+        if had_share_seo:
+            title = _KP_WORD_KIND_SUFFIX_RE.sub("", title).strip(" ,-—–:")
         if title:
             return title, year
-    return first_line, None
+    if had_share_seo:
+        cleaned = _KP_WORD_KIND_SUFFIX_RE.sub("", cleaned).strip(" ,-—–:")
+    return cleaned, None
 
 
 def search_movie_candidates(
@@ -57,10 +90,11 @@ def search_movie_candidates(
     tmdb: TMDBClient | None = None,
     limit: int = 3,
     title_orig: str | None = None,
+    raw_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """Ищет кандидатов через официальный TMDB API, а если ключ не задан — через официальный Wikidata API."""
     tmdb = tmdb or TMDBClient()
-    direct = parse_direct_media_ids(query)
+    direct = parse_direct_media_ids(raw_text or query)
     if direct.get("tmdb_id") and direct.get("media_type") and tmdb.is_configured:
         return [tmdb.get_details(str(direct["media_type"]), int(direct["tmdb_id"]))]
     if direct.get("imdb_id"):
@@ -102,6 +136,15 @@ def search_movie_candidates(
         if title_orig and title_orig.strip().lower() != clean_query.lower():
             queries_to_try.append((title_orig.strip(), None))
 
+    if not clean_query or _URL_ONLY_RE.match(clean_query):
+        return []
+
+    def _with_direct_kp(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if direct.get("kp_id"):
+            for item in items:
+                item.setdefault("kp_id", int(direct["kp_id"]))
+        return items
+
     if tmdb.is_configured:
         seen_ids: set[tuple[str, int]] = set()
         for q, yr in queries_to_try:
@@ -114,12 +157,12 @@ def search_movie_candidates(
                         seen_ids.add(key)
                         unique.append(c)
                 if unique:
-                    return unique
+                    return _with_direct_kp(unique)
 
     candidates = search_wikidata_movies(clean_query, year=year, limit=limit)
     if not candidates and title_orig:
         candidates = search_wikidata_movies(title_orig, year=year, limit=limit)
-    return candidates
+    return _with_direct_kp(candidates)
 
 
 def is_unambiguous_match(

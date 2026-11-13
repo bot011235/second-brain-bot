@@ -171,7 +171,7 @@ def _handle_movie_text(
 ) -> dict[str, Any]:
     query, year = movies_pipeline.parse_title_and_year(text)
     candidates = movies_pipeline.search_movie_candidates(
-        query, year=year, tmdb=tmdb, limit=3, title_orig=title_orig
+        query, year=year, tmdb=tmdb, limit=3, title_orig=title_orig, raw_text=text
     )
 
     if not candidates:
@@ -379,7 +379,17 @@ def _handle_message(
                 except Exception:
                     pass
             return {"status": "batch_created", "count": len(results), "results": results}
-        return _handle_movie_text(conn, lines[0] if lines else text, chat_id, thread_id, msg_id, tg, tmdb=tmdb)
+        return _handle_movie_text(
+            conn,
+            lines[0] if lines else text,
+            chat_id,
+            thread_id,
+            msg_id,
+            tg,
+            tmdb=tmdb,
+            source_url=url,
+            source_type=source_type,
+        )
 
     # Этап 3: запросы в топике Books (поддерживает и 1 книгу, и список книг построчно)
     if topic_name == "books" and not url:
