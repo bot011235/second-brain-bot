@@ -1589,8 +1589,20 @@ html[data-theme="dark"] .cat-post {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   margin-top: auto;
   flex-shrink: 0;
+}
+
+.orig-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.orig-tg-link {
+  margin-left: auto;
 }
 
 .delete-btn {

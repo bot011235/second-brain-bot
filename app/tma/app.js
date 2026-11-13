@@ -634,11 +634,6 @@
       );
     }
 
-    const chatUrl = buildTelegramMessageLink(item);
-    const chatLinkHtml = chatUrl
-      ? `<a class="liquid-pill liquid-chat-link chat-link" href="${escapeHtml(chatUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть в чате Telegram" aria-label="Открыть в чате Telegram">${SVC_ICONS.telegram}</a>`
-      : "";
-
     const delBtnHtml = `<button type="button" class="liquid-pill liquid-delete-btn delete-btn" data-action="delete" data-id="${item.id}" title="Удалить запись" aria-label="Удалить запись">${UI_ICONS.trash}</button>`;
     const starIcon = currentRating ? UI_ICONS.starFilled : UI_ICONS.star;
     const cls = variant ? `card-actions ${variant}` : "card-actions";
@@ -658,7 +653,6 @@
           <span class="pill-chevron">${UI_ICONS.chevronDown}</span>
         </div>
         <span class="card-actions-right">
-          ${chatLinkHtml}
           ${delBtnHtml}
         </span>
       </div>
@@ -764,10 +758,7 @@
       })
       .join("");
 
-    const chatUrl = buildTelegramMessageLink(item);
-    const chatHtml = chatUrl
-      ? `<a class="drawer-link-btn" href="${chatUrl}" target="_blank" rel="noopener noreferrer">${SVC_ICONS.telegram}<span>Открыть в чате</span></a>`
-      : `<span></span>`;
+    const chatHtml = `<span></span>`;
 
     const deleteFooterHtml = state.drawerConfirmDelete
       ? `
@@ -1325,6 +1316,11 @@
         const dateStr = (orig.created_at || "").slice(0, 16).replace("T", " ");
         const authorHtml = orig.author ? `<span class="orig-author">${escapeHtml(orig.author)}</span>` : "";
         const sourceBtnHtml = orig.source_url ? buildSourceBadgeHtml(orig.source_url, null) : "";
+        const tgUrl = buildTelegramMessageLink(orig);
+        const tgBtnHtml = tgUrl
+          ? `<a class="liquid-pill liquid-chat-link chat-link orig-tg-link" href="${escapeHtml(tgUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть пост в Telegram" aria-label="Открыть пост в Telegram">${SVC_ICONS.telegram}</a>`
+          : "";
+        const hasFooter = Boolean(sourceBtnHtml || tgBtnHtml);
 
         const rawTrim = (orig.raw_text || "").trim();
         const extTrim = (orig.extracted_text || "").trim();
@@ -1344,7 +1340,11 @@
                 ? `<div class="orig-extracted-box"><div class="orig-extracted-label">Текст из источника:</div><div class="orig-extracted-text">${escapeHtml(extTrim)}</div></div>`
                 : ""
             }
-            ${sourceBtnHtml ? `<div class="orig-footer">${sourceBtnHtml}</div>` : ""}
+            ${
+              hasFooter
+                ? `<div class="orig-footer"><div class="orig-footer-left">${sourceBtnHtml}</div>${tgBtnHtml}</div>`
+                : ""
+            }
           </article>
         `;
       })
@@ -1416,6 +1416,7 @@
       const data = await res.json();
       if (signal.aborted) return;
       state.originals = data.items || [];
+      if (data.tg_chat_id) state.tgChatId = data.tg_chat_id;
       renderOriginals();
     } catch (err) {
       if (err && err.name === "AbortError") return;

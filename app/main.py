@@ -238,7 +238,7 @@ def api_list_originals(
     conn = get_connection()
     try:
         items = repo.list_original_messages(conn, tab=tab, q=q, limit=limit)
-        return {"items": items, "count": len(items)}
+        return {"items": items, "count": len(items), "tg_chat_id": settings.tg_chat_id}
     finally:
         conn.close()
 

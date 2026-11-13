@@ -43,6 +43,14 @@
 
 ## 3. Хронология изменений (Лог правок по всем чатам)
 
+### 2026-11-13 (v2) — Перенос ссылки на пост в Telegram из Каталога в Оригиналы (`app/tma/app.js`, `app/tma/styles.css`, `app/tma/index.html`, `app/main.py`)
+- **Каталог (`app/tma/app.js`)**:
+  - Убрана кнопка-ссылка на сообщение в Telegram (`buildTelegramMessageLink`) со всех карточек/строк Каталога (`buildCardActionsHtml` в режимах «Список», «Карточки», «Канбан») и из детальной шторки (`renderDetailDrawer`), так как для записей, извлечённых из подборок, `tg_message_id` не всегда привязывался и кнопка была лишней в каталоге.
+- **Оригиналы (`app/tma/app.js`, `app/tma/styles.css`, `app/main.py`)**:
+  - В `/api/originals` добавлено поле `tg_chat_id` (и сохраняется в `state.tgChatId` в `loadOriginals`), чтобы ссылка на сообщение работала и при прямом открытии раздела «Оригиналы».
+  - В `renderOriginals` в правый нижний угол (`.orig-footer` / `.orig-tg-link`) добавлена кнопка с иконкой Telegram, ведущая напрямую на исходный пост в чате Telegram (`https://t.me/c/...`).
+  - Версии кэша ассетов в `app/tma/index.html` подняты до `?v=21`.
+
 ### 2026-11-13 — Отображение тегов в режиме «Список» и повышение надёжности ИИ-тегирования (`app/tma/app.js`, `app/tma/styles.css`, `app/tma/index.html`, `app/clients/groq_llm.py`, `app/bot/handlers.py`)
 - **Витрина Notes (`app/tma/app.js`, `app/tma/styles.css`, `app/tma/index.html`)**:
   - В компактном режиме по умолчанию «Список» (`renderListRow`) добавлен вывод тегов и жанров (`.list-tags` / `.list-tag-pill`, до 4 кликабельных `#тегов` в строке). Ранее теги отображались только в режиме «Карточки» и в детальной шторке (`Detail Drawer`), из-за чего у новых статей и постов (включая свитера UNIQLO) в списке не было видно присвоенных ИИ тегов.
