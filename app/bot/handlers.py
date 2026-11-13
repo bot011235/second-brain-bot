@@ -7,7 +7,7 @@ from app.bot.cards import format_status_label, render_card_html
 from app.bot.keyboards import build_item_keyboard
 from app.bot.telegram_api import TelegramClient
 from app.clients.books import BooksClient
-from app.clients.groq_llm import GroqLLMClient
+from app.clients.groq_llm import GroqLLMClient, extract_hashtags
 from app.clients.scraper import scrape_url
 from app.clients.tmdb import TMDBClient
 from app.clients.youtube import YouTubeClient
@@ -517,12 +517,20 @@ def _handle_message(
 
         # Обычная ссылка (YouTube / статья / пост): делаем выжимку и теги
         existing_tags = repo.list_existing_tags(conn)
-        llm_res = llm.summarize_and_tag(title=raw_title, text=raw_desc or text, existing_tags=existing_tags)
+        user_note = _URL_RE.sub("", text).strip()
+        llm_text_parts = [p for p in (user_note, raw_desc) if p]
+        llm_input_text = "\n\n".join(llm_text_parts) if llm_text_parts else text
+        llm_res = llm.summarize_and_tag(title=raw_title, text=llm_input_text, existing_tags=existing_tags)
         title_line = llm_res.get("title_ru") or raw_title or title_line
         summary = llm_res.get("summary") or raw_desc
-        for t in llm_res.get("tags") or []:
-            if t not in tags:
-                tags.append(t)
+
+        # Сначала русскоязычные теги от LLM, затем (если есть) теги источника (YouTube) и хештеги
+        merged_tags: list[str] = []
+        for candidate_tag in [*(llm_res.get("tags") or []), *tags, *extract_hashtags(llm_input_text)]:
+            clean_t = str(candidate_tag).lstrip("#").strip().lower()
+            if clean_t and clean_t not in merged_tags:
+                merged_tags.append(clean_t)
+        tags = merged_tags[:6]
     else:
         _record_original_message(
             conn,
@@ -533,14 +541,20 @@ def _handle_message(
             msg_id=msg_id,
             source_type="manual",
         )
+        tags = extract_hashtags(text)
         if category == "idea" and settings.llm_for_ideas:
             llm = GroqLLMClient()
-            if llm.is_configured and len(text) > 80:
+            if llm.is_configured and len(text.strip()) >= 5:
                 existing_tags = repo.list_existing_tags(conn)
                 llm_res = llm.summarize_and_tag(title=None, text=text, existing_tags=existing_tags)
-                title_line = llm_res.get("title_ru") or title_line
-                summary = llm_res.get("summary") or summary
-                tags = list(llm_res.get("tags") or [])
+                if len(text) > 80:
+                    title_line = llm_res.get("title_ru") or title_line
+                    summary = llm_res.get("summary") or summary
+                for t in llm_res.get("tags") or []:
+                    clean_t = str(t).lstrip("#").strip().lower()
+                    if clean_t and clean_t not in tags:
+                        tags.append(clean_t)
+                tags = tags[:6]
 
     item = repo.create_item(
         conn,

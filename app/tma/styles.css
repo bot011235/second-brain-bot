@@ -747,6 +747,20 @@ html[data-theme="dark"] .cat-post {
   margin-top: 2px;
 }
 
+.list-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.list-tag-pill {
+  font-size: 11px;
+  padding: 1px 6px;
+  line-height: 1.35;
+}
+
 .list-right {
   display: flex;
   align-items: center;

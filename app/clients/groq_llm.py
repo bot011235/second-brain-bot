@@ -10,6 +10,46 @@ from app.config import settings
 
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", flags=re.DOTALL)
+_HASHTAG_RE = re.compile(r"(?:^|\s)#([a-zA-Zа-яА-ЯёЁіІїЇєЄґҐ0-9_]{2,30})\b")
+
+
+def extract_hashtags(text: str | None) -> list[str]:
+    """Извлекает #хештеги из текста (кроме чисто числовых), в нижнем регистре без #."""
+    if not text:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for match in _HASHTAG_RE.findall(text):
+        cleaned = match.strip().lower()
+        if not cleaned or cleaned.isdigit() or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        out.append(cleaned)
+        if len(out) >= 5:
+            break
+    return out
+
+
+def normalize_llm_tags(raw_tags: Any) -> list[str]:
+    """Нормализует теги из ответа LLM (список или строка через запятую), убирая # и дубли."""
+    if isinstance(raw_tags, str):
+        items = [part.strip() for part in raw_tags.split(",")]
+    elif isinstance(raw_tags, list):
+        items = [str(part).strip() for part in raw_tags]
+    else:
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        cleaned = item.lstrip("#").strip().lower()
+        if not cleaned or len(cleaned) > 32 or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        out.append(cleaned)
+        if len(out) >= 5:
+            break
+    return out
 
 
 def _extract_json_dict(raw: str) -> dict[str, Any] | None:
@@ -98,26 +138,34 @@ class GroqLLMClient:
         """Возвращает {'title_ru': str, 'summary': str, 'tags': list[str]} на русском языке."""
         fallback_title = (title or text or "Заметка").splitlines()[0][:120]
         fallback_summary = (text or "").strip()[:450] or None
+        fallback_hashtags = extract_hashtags(f"{title or ''} {text or ''}")
         if not self.is_configured or not (title or text):
-            return {"title_ru": fallback_title, "summary": fallback_summary, "tags": []}
+            return {"title_ru": fallback_title, "summary": fallback_summary, "tags": fallback_hashtags}
 
         existing_str = ", ".join((existing_tags or [])[:40])
         sys_prompt = (
-            "Ты помощник для личной базы знаний («Второй мозг»). "
+            "Ты помощник для личной базы знаний («Notes»). "
             "Отвечай СТРОГО валидным JSON-объектом вида: "
             '{"title_ru": "короткий понятный заголовок на русском", '
             '"summary": "выжимка сути в 2-3 предложениях на русском", '
             '"tags": ["тег1", "тег2", "тег3"]}. '
-            "Теги — в нижнем регистре, 1-2 слова на русском. По возможности переиспользуй существующие теги: "
+            "ОБЯЗАТЕЛЬНО подбери от 1 до 3 тегов (поле tags не должно быть пустым): "
+            "теги — в нижнем регистре, 1-2 слова на русском без символа #. "
+            "По возможности переиспользуй существующие теги: "
             f"[{existing_str}]."
         )
         user_prompt = f"Заголовок: {title or ''}\n\nТекст:\n{text or ''}"
-        parsed = self._call_json(sys_prompt, user_prompt)
-        if not parsed:
-            return {"title_ru": fallback_title, "summary": fallback_summary, "tags": []}
 
-        raw_tags = parsed.get("tags")
-        tags = [str(t).strip().lower() for t in raw_tags[:5] if str(t).strip()] if isinstance(raw_tags, list) else []
+        def _has_tags(p: dict[str, Any]) -> bool:
+            return len(normalize_llm_tags(p.get("tags"))) > 0
+
+        parsed = self._call_json(sys_prompt, user_prompt, accept=_has_tags)
+        if not parsed:
+            return {"title_ru": fallback_title, "summary": fallback_summary, "tags": fallback_hashtags}
+
+        tags = normalize_llm_tags(parsed.get("tags"))
+        if not tags:
+            tags = fallback_hashtags
         return {
             "title_ru": str(parsed.get("title_ru") or fallback_title).strip()[:150],
             "summary": str(parsed.get("summary") or fallback_summary or "").strip() or None,

@@ -1103,6 +1103,12 @@
       subParts.push(`Сезонов: ${Number(meta.seasons_count)}`);
     }
     const ratingsHtml = buildRatingsHtml(item, { compact: true, includeSources: false });
+    const allTags = [...(item.genres || []), ...(item.tags || [])].slice(0, 4);
+    const tagsHtml = allTags.length
+      ? `<div class="list-tags">${allTags
+          .map((g) => `<span class="genre-pill list-tag-pill" data-tag="${escapeHtml(g)}">#${escapeHtml(g)}</span>`)
+          .join("")}</div>`
+      : "";
     const cornerSourceHtml = buildCornerSourceHtml(item);
     const desktopActionsHtml = buildCardActionsHtml(item, "list-actions");
     const mobileActionsHtml = buildCardActionsHtml(item);
@@ -1121,6 +1127,7 @@
           </div>
           ${subParts.length ? `<div class="list-subline">${subParts.join(" · ")}</div>` : ""}
           ${ratingsHtml ? `<div class="list-ratings">${ratingsHtml}</div>` : ""}
+          ${tagsHtml}
         </div>
         <div class="list-right">
           ${desktopActionsHtml}
