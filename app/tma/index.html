@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Notes</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=22" />
+  <link rel="stylesheet" href="./styles.css?v=23" />
 </head>
 <body>
   <div class="app-shell">
@@ -153,11 +153,16 @@
             </div>
           </div>
 
-          <button type="button" class="mobile-filter-chip" id="mobileFilterBtn" title="Фильтры и сортировка">
-            <span class="nav-ico" data-icon="sliders"></span>
-            <span>Фильтры</span>
-            <span class="filter-dot hidden" id="mobileFilterDot"></span>
-          </button>
+          <div class="mobile-sort-wrap" id="mobileSortWrap">
+            <span class="mobile-sort-ico" aria-hidden="true">↕</span>
+            <select id="mobileSortSelect" class="mobile-sort-select" title="Сортировка" aria-label="Сортировка">
+              <option value="created">По дате ↓</option>
+              <option value="imdb">IMDb / Goodreads ↓</option>
+              <option value="kp">КП / FantLab ↓</option>
+              <option value="rt">Rotten Tomatoes ↓</option>
+              <option value="user">Моя оценка ↓</option>
+            </select>
+          </div>
         </div>
 
         <!-- Мобильная строка табов категорий -->
@@ -198,6 +203,7 @@
     <button type="button" class="bottom-btn" id="bottomFiltersBtn">
       <span class="nav-ico" data-icon="sliders"></span>
       <span>Фильтры</span>
+      <span class="filter-dot bottom-filter-dot hidden" id="mobileFilterDot"></span>
     </button>
     <button type="button" class="bottom-btn" id="bottomSearchBtn">
       <span class="nav-ico" data-icon="search"></span>
@@ -266,6 +272,6 @@
 
   <div id="statusPopover" class="liquid-menu hidden" role="listbox" aria-label="Статус"></div>
 
-  <script src="./app.js?v=22"></script>
+  <script src="./app.js?v=23"></script>
 </body>
 </html>

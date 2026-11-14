@@ -88,6 +88,7 @@
     drawerConfirmDelete: false,
     statusPopoverItemId: null,
     filtersSheetOpen: false,
+    expandedTagIds: new Set(),
   };
 
   let itemsAbort = null;
@@ -462,19 +463,21 @@
     if (item.category === "book") {
       const rFl = meta.rating_fantlab ?? item.rating_kp;
       const uFl = meta.url_fantlab || "#";
-      if (rFl != null) {
+      if (rFl != null || meta.url_fantlab) {
+        const flVal = rFl != null ? `<span>${rFl}</span>` : "";
         badges.push(
-          `<a class="rating-badge ${badgeTone(rFl, 10)}" href="${uFl}" target="_blank" rel="noopener noreferrer">${BRAND_BADGES.fantlab}<span>${rFl}</span></a>`
+          `<a class="rating-badge ${badgeTone(rFl, 10)}" href="${uFl}" target="_blank" rel="noopener noreferrer">${BRAND_BADGES.fantlab}${flVal}</a>`
         );
       }
       const rGr = meta.rating_goodreads ?? item.rating_imdb;
       const uGr = meta.url_goodreads || "#";
-      if (rGr != null) {
+      if (rGr != null || meta.url_goodreads) {
+        const grVal = rGr != null ? `<span>${rGr}</span>` : "";
         badges.push(
-          `<a class="rating-badge ${badgeTone(rGr, 5)}" href="${uGr}" target="_blank" rel="noopener noreferrer">${BRAND_BADGES.goodreads}<span>${rGr}</span></a>`
+          `<a class="rating-badge ${badgeTone(rGr, 5)}" href="${uGr}" target="_blank" rel="noopener noreferrer">${BRAND_BADGES.goodreads}${grVal}</a>`
         );
       }
-      if (!compact && meta.info_link) {
+      if (meta.info_link) {
         badges.push(`<a class="rating-badge" href="${meta.info_link}" target="_blank" rel="noopener noreferrer">${BRAND_BADGES.wiki}<span>Вики</span></a>`);
       }
     } else if (item.category === "movie" || item.category === "series") {
@@ -495,14 +498,15 @@
       badges.push(
         `<a class="rating-badge ${badgeTone(item.rating_kp, 10)}" href="${kpUrl}" target="_blank" rel="noopener noreferrer">${BRAND_BADGES.kp}${kpVal}</a>`
       );
-      if (!compact && meta.rating_tmdb != null) {
+      if (meta.rating_tmdb != null || meta.tmdb_id) {
         const tmdbType = item.category === "series" ? "tv" : "movie";
         const url = meta.tmdb_id ? `https://www.themoviedb.org/${tmdbType}/${meta.tmdb_id}` : "#";
+        const tmdbVal = meta.rating_tmdb != null ? `<span>${meta.rating_tmdb}</span>` : "";
         badges.push(
-          `<a class="rating-badge ${badgeTone(meta.rating_tmdb, 10)}" href="${url}" target="_blank" rel="noopener noreferrer">${BRAND_BADGES.tmdb}<span>${meta.rating_tmdb}</span></a>`
+          `<a class="rating-badge ${badgeTone(meta.rating_tmdb, 10)}" href="${url}" target="_blank" rel="noopener noreferrer">${BRAND_BADGES.tmdb}${tmdbVal}</a>`
         );
       }
-      if (item.rating_rt != null || (!compact && item.url_rt)) {
+      if (item.rating_rt != null || item.url_rt) {
         const url = item.url_rt || "#";
         const rtVal = item.rating_rt != null ? `<span>${item.rating_rt}%</span>` : "";
         badges.push(
@@ -881,6 +885,14 @@
   const filtersSheetBody = document.getElementById("filtersSheetBody");
 
   function renderFiltersSheet() {
+    const categoryOpts = [
+      { v: "", l: "Все" },
+      { v: "movies", l: "🎬 Кино" },
+      { v: "books", l: "📚 Книги" },
+      { v: "video", l: "▶️ YouTube" },
+      { v: "article", l: "📰 Статьи" },
+      { v: "ideas", l: "💡 Идеи" },
+    ];
     const statusOpts = [
       { v: "all", l: "Все" },
       { v: "inbox", l: "📥 Входящие" },
@@ -901,6 +913,7 @@
       { v: "cards", l: "⊞ Карточки" },
       { v: "kanban", l: "▥ Канбан" },
     ];
+    const sortedTags = [...state.allTags].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 
     filtersSheetBody.innerHTML = `
       <div class="drawer-section">
@@ -919,6 +932,18 @@
         state.view === "catalog"
           ? `
         <div class="drawer-section">
+          <div class="drawer-section-title">Категория</div>
+          <div class="sheet-pills-grid">
+            ${categoryOpts
+              .map(
+                (c) =>
+                  `<button type="button" class="sheet-pill ${state.tab === c.v ? "active" : ""}" data-sheet-tab="${c.v}">${c.l}</button>`
+              )
+              .join("")}
+          </div>
+        </div>
+
+        <div class="drawer-section">
           <div class="drawer-section-title">Статус</div>
           <div class="sheet-pills-grid">
             ${statusOpts
@@ -929,6 +954,25 @@
               .join("")}
           </div>
         </div>
+
+        ${
+          sortedTags.length
+            ? `
+        <div class="drawer-section">
+          <div class="drawer-section-title">Теги</div>
+          <div class="sheet-pills-grid sheet-tags-grid">
+            <button type="button" class="sheet-pill ${state.tag === "" ? "active" : ""}" data-sheet-tag="">Все теги</button>
+            ${sortedTags
+              .map(
+                (t) =>
+                  `<button type="button" class="sheet-pill ${state.tag === t.tag ? "active" : ""}" data-sheet-tag="${escapeHtml(t.tag)}">#${escapeHtml(t.tag)} (${t.count})</button>`
+              )
+              .join("")}
+          </div>
+        </div>
+        `
+            : ""
+        }
 
         <div class="drawer-section">
           <div class="drawer-section-title">Сортировка</div>
@@ -946,7 +990,7 @@
           Сбросить фильтры
         </button>
       `
-          : `<div class="drawer-section"><p style="font-size:13.5px;color:var(--muted);">Фильтры по статусу, сортировке и режимам отображения доступны в разделе «Каталог».</p></div>`
+          : `<div class="drawer-section"><p style="font-size:13.5px;color:var(--muted);">Фильтры по категориям, статусу, тегам и сортировке доступны в разделе «Каталог».</p></div>`
       }
     `;
   }
@@ -982,6 +1026,16 @@
       return;
     }
 
+    const tabBtn = e.target.closest("[data-sheet-tab]");
+    if (tabBtn) {
+      state.tab = tabBtn.dataset.sheetTab || "";
+      state.tag = "";
+      refreshCurrentView();
+      renderFiltersSheet();
+      haptic("selection");
+      return;
+    }
+
     const stBtn = e.target.closest("[data-sheet-status]");
     if (stBtn) {
       state.status = stBtn.dataset.sheetStatus;
@@ -992,10 +1046,23 @@
       return;
     }
 
+    const tagBtn = e.target.closest("[data-sheet-tag]");
+    if (tagBtn) {
+      const clickedTag = tagBtn.dataset.sheetTag || "";
+      state.tag = state.tag === clickedTag && clickedTag !== "" ? "" : clickedTag;
+      syncNavigationState();
+      renderTagBar();
+      renderFiltersSheet();
+      loadItems();
+      return;
+    }
+
     const sortBtn = e.target.closest("[data-sheet-sort]");
     if (sortBtn) {
       state.sort = sortBtn.dataset.sheetSort;
       document.getElementById("sortSelect").value = state.sort;
+      const mobSort = document.getElementById("mobileSortSelect");
+      if (mobSort) mobSort.value = state.sort;
       syncNavigationState();
       renderFiltersSheet();
       loadItems();
@@ -1003,15 +1070,16 @@
     }
 
     if (e.target.id === "sheetResetFiltersBtn") {
+      state.tab = "";
       state.status = "all";
       state.sort = "created";
       state.tag = "";
       document.getElementById("statusFilterSelect").value = "all";
       document.getElementById("sortSelect").value = "created";
-      syncNavigationState();
-      renderTagBar();
+      const mobSort = document.getElementById("mobileSortSelect");
+      if (mobSort) mobSort.value = "created";
+      refreshCurrentView();
       renderFiltersSheet();
-      loadItems();
     }
   });
 
@@ -1074,6 +1142,71 @@
     return true;
   }
 
+  function collectItemTags(item) {
+    const out = [];
+    const seen = new Set();
+    [...(item.genres || []), ...(item.tags || [])].forEach((raw) => {
+      const clean = String(raw || "").trim();
+      const key = clean.toLowerCase();
+      if (clean && !seen.has(key)) {
+        seen.add(key);
+        out.push(clean);
+      }
+    });
+    return out;
+  }
+
+  function buildTagsLineHtml(item, containerClass, pillClass = "genre-pill") {
+    const allTags = collectItemTags(item);
+    if (!allTags.length) return "";
+    const isExpanded = state.expandedTagIds.has(Number(item.id));
+    return `<div class="${containerClass}${isExpanded ? " tags-expanded" : ""}" data-tags-item-id="${item.id}">${allTags
+      .map((g) => `<span class="${pillClass}" data-tag="${escapeHtml(g)}">#${escapeHtml(g)}</span>`)
+      .join("")}</div>`;
+  }
+
+  function applyMobileSingleLineTags() {
+    const isMobile = window.innerWidth <= 820;
+    const containers = document.querySelectorAll("#catalogGrid .list-tags[data-tags-item-id], #catalogGrid .genres-line[data-tags-item-id]");
+    containers.forEach((el) => {
+      el.querySelectorAll(".tags-expand-btn").forEach((b) => b.remove());
+      const pills = Array.from(el.querySelectorAll(".genre-pill"));
+      pills.forEach((p) => p.classList.remove("tag-overflow-hidden", "tag-first-cap"));
+
+      const itemId = Number(el.dataset.tagsItemId);
+      const isExpanded = state.expandedTagIds.has(itemId);
+      el.classList.toggle("tags-expanded", isExpanded);
+
+      if (!isMobile || isExpanded || pills.length <= 1) return;
+
+      const firstTop = pills[0].offsetTop;
+      if (!pills.some((p) => p.offsetTop > firstTop + 4)) return;
+
+      const expandBtn = document.createElement("button");
+      expandBtn.type = "button";
+      expandBtn.className = el.classList.contains("list-tags")
+        ? "genre-pill list-tag-pill tags-expand-btn"
+        : "genre-pill tags-expand-btn";
+      expandBtn.dataset.action = "expand-tags";
+      expandBtn.dataset.id = String(itemId);
+      expandBtn.title = "Показать все теги";
+      expandBtn.setAttribute("aria-label", "Показать все теги");
+      expandBtn.textContent = "...";
+      el.appendChild(expandBtn);
+
+      for (let i = pills.length - 1; i >= 1; i--) {
+        pills[i].classList.add("tag-overflow-hidden");
+        const prev = pills[i - 1];
+        if (expandBtn.offsetTop <= firstTop + 4 && prev.offsetTop <= firstTop + 4) {
+          break;
+        }
+      }
+      if (expandBtn.offsetTop > firstTop + 4) {
+        pills[0].classList.add("tag-first-cap");
+      }
+    });
+  }
+
   function renderListRow(item) {
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     const catClass = `cat-${escapeHtml(item.category || "idea")}`;
@@ -1093,13 +1226,8 @@
     if (item.category === "series" && meta.seasons_count) {
       subParts.push(`Сезонов: ${Number(meta.seasons_count)}`);
     }
-    const ratingsHtml = buildRatingsHtml(item, { compact: true, includeSources: false });
-    const allTags = [...(item.genres || []), ...(item.tags || [])].slice(0, 4);
-    const tagsHtml = allTags.length
-      ? `<div class="list-tags">${allTags
-          .map((g) => `<span class="genre-pill list-tag-pill" data-tag="${escapeHtml(g)}">#${escapeHtml(g)}</span>`)
-          .join("")}</div>`
-      : "";
+    const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
+    const tagsHtml = buildTagsLineHtml(item, "list-tags", "genre-pill list-tag-pill");
     const cornerSourceHtml = buildCornerSourceHtml(item);
     const desktopActionsHtml = buildCardActionsHtml(item, "list-actions");
     const mobileActionsHtml = buildCardActionsHtml(item);
@@ -1108,13 +1236,8 @@
       <article class="list-row cat-accent ${catClass}" data-open-id="${item.id}">
         <div class="list-poster">${posterHtml}</div>
         <div class="list-main">
-          <div class="list-head-row">
-            <div class="list-title-line">
-              <span class="list-title">${escapeHtml(item.title_ru)}</span>
-              ${yearHtml}
-              ${origHtml}
-            </div>
-            ${cornerSourceHtml}
+          <div class="list-title-line">
+            <span class="list-title">${escapeHtml(item.title_ru)}</span>${yearHtml ? ` ${yearHtml}` : ""}${origHtml ? ` ${origHtml}` : ""}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}
           </div>
           ${subParts.length ? `<div class="list-subline">${subParts.join(" · ")}</div>` : ""}
           ${ratingsHtml ? `<div class="list-ratings">${ratingsHtml}</div>` : ""}
@@ -1151,12 +1274,7 @@
     }
     const creatorLine = subParts.length ? `<div class="card-creator">${subParts.join(" · ")}</div>` : "";
 
-    const allTags = [...(item.genres || []), ...(item.tags || [])].slice(0, 5);
-    const genresHtml = allTags.length
-      ? `<div class="genres-line">${allTags
-          .map((g) => `<span class="genre-pill" data-tag="${escapeHtml(g)}">#${escapeHtml(g)}</span>`)
-          .join("")}</div>`
-      : "";
+    const genresHtml = buildTagsLineHtml(item, "genres-line", "genre-pill");
 
     const summaryHtml = item.summary ? `<div class="summary-text">${escapeHtml(item.summary)}</div>` : "";
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
@@ -1167,10 +1285,7 @@
         <div class="card-top">
           <div class="poster-box">${posterHtml}</div>
           <div class="card-info">
-            <div class="card-head-row">
-              <div class="card-title">${escapeHtml(item.title_ru)}${yearStr}</div>
-              ${cornerSourceHtml}
-            </div>
+            <div class="card-title">${escapeHtml(item.title_ru)}${yearStr}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}</div>
             ${origLine}
             ${creatorLine}
             ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
@@ -1192,7 +1307,7 @@
       ? `<img src="${escapeHtml(item.poster_url)}" alt="" loading="lazy" />`
       : `<span>${emoji}</span>`;
     const yearStr = item.release_year ? ` (${item.release_year})` : "";
-    const ratingsHtml = buildRatingsHtml(item, { compact: true, includeSources: false });
+    const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
     const cornerSourceHtml = buildCornerSourceHtml(item);
 
     return `
@@ -1200,10 +1315,7 @@
         <div class="kanban-card-top">
           <div class="kanban-poster">${posterHtml}</div>
           <div class="kanban-card-meta">
-            <div class="card-head-row">
-              <div class="list-title" style="font-size:14.5px;">${escapeHtml(item.title_ru)}${yearStr}</div>
-              ${cornerSourceHtml}
-            </div>
+            <div class="list-title" style="font-size:14.5px;">${escapeHtml(item.title_ru)}${yearStr}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}</div>
             ${shouldShowCreator(item) ? `<div class="list-subline" style="font-size:12px;">${escapeHtml(item.creator)}</div>` : ""}
           </div>
         </div>
@@ -1278,6 +1390,8 @@
       grid.className = "catalog-list view-list";
       grid.innerHTML = state.items.map(renderListRow).join("");
     }
+
+    applyMobileSingleLineTags();
 
     if (state.drawerItemId !== null) {
       renderDetailDrawer();
@@ -1382,14 +1496,18 @@
 
     document.getElementById("desktopCatalogControls").classList.toggle("hidden", isOriginals);
     document.getElementById("viewModeSwitchMobile").classList.toggle("hidden", isOriginals);
-    document.getElementById("mobileFilterBtn").classList.toggle("hidden", isOriginals);
+    const mobSortWrap = document.getElementById("mobileSortWrap");
+    if (mobSortWrap) mobSortWrap.classList.toggle("hidden", isOriginals);
+    const mobSortSelect = document.getElementById("mobileSortSelect");
+    if (mobSortSelect) mobSortSelect.value = state.sort;
     document.getElementById("tagBar").classList.toggle("hidden", isOriginals);
 
     document.getElementById("searchInput").placeholder = isOriginals
       ? "Простой поиск по оригиналам..."
       : "Поиск по названию, автору, описанию...";
 
-    const hasActiveFilter = !isOriginals && (state.status !== "all" || state.sort !== "created" || Boolean(state.tag));
+    const hasActiveFilter =
+      !isOriginals && (state.status !== "all" || state.sort !== "created" || Boolean(state.tag) || Boolean(state.tab));
     const filterDot = document.getElementById("mobileFilterDot");
     if (filterDot) filterDot.classList.toggle("hidden", !hasActiveFilter);
   }
@@ -1438,6 +1556,9 @@
       if (signal.aborted) return;
       state.allTags = data.tags || [];
       renderTagBar();
+      if (state.filtersSheetOpen) {
+        renderFiltersSheet();
+      }
     } catch (err) {
       if (err && err.name === "AbortError") return;
       throw err;
@@ -1614,8 +1735,6 @@
     }
   });
 
-  document.getElementById("mobileFilterBtn").addEventListener("click", openFiltersSheet);
-
   function bindCategoryContainer(containerId) {
     const el = document.getElementById(containerId);
     if (!el) return;
@@ -1648,9 +1767,21 @@
 
   document.getElementById("sortSelect").addEventListener("change", (e) => {
     state.sort = e.target.value;
+    const mobSort = document.getElementById("mobileSortSelect");
+    if (mobSort) mobSort.value = state.sort;
     syncNavigationState();
     loadItems();
   });
+
+  const mobileSortSelectEl = document.getElementById("mobileSortSelect");
+  if (mobileSortSelectEl) {
+    mobileSortSelectEl.addEventListener("change", (e) => {
+      state.sort = e.target.value;
+      document.getElementById("sortSelect").value = state.sort;
+      syncNavigationState();
+      loadItems();
+    });
+  }
 
   document.getElementById("tagBar").addEventListener("click", (e) => {
     const btn = e.target.closest(".chip");
@@ -1731,6 +1862,14 @@
       return;
     }
 
+    const expandTagsBtn = e.target.closest("[data-action='expand-tags']");
+    if (expandTagsBtn && expandTagsBtn.dataset.id) {
+      e.stopPropagation();
+      state.expandedTagIds.add(Number(expandTagsBtn.dataset.id));
+      applyMobileSingleLineTags();
+      return;
+    }
+
     const pill = e.target.closest(".genre-pill");
     if (pill) {
       e.stopPropagation();
@@ -1784,7 +1923,10 @@
 
   window.addEventListener("resize", () => {
     closeStatusPopover();
-    if (state.view === "catalog") renderTagBar();
+    if (state.view === "catalog") {
+      renderTagBar();
+      applyMobileSingleLineTags();
+    }
   });
 
   window.addEventListener("scroll", closeStatusPopover, { passive: true });
