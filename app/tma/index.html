@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Notes</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=23" />
+  <link rel="stylesheet" href="./styles.css?v=25" />
 </head>
 <body>
   <div class="app-shell">
@@ -17,6 +17,14 @@
           <h1 class="brand-title">Notes</h1>
           <p class="subtitle" id="totalCountLabel">Загрузка...</p>
         </div>
+      </div>
+
+      <div class="sidebar-quick-add">
+        <button type="button" class="quick-add-primary-btn" id="openAddModalDesktop" title="Добавить запись (N)">
+          <span class="nav-ico" data-icon="plus"></span>
+          <span>Добавить</span>
+          <kbd class="kbd-hint">N</kbd>
+        </button>
       </div>
 
       <div class="sidebar-section">
@@ -94,18 +102,16 @@
             </div>
           </div>
           <div class="mobile-header-actions">
-            <div class="view-mode-compact" id="viewModeSwitchMobile" title="Режим отображения">
-              <button type="button" class="mode-icon-btn active" data-mode="list" title="Список"><span class="nav-ico" data-icon="list"></span></button>
-              <button type="button" class="mode-icon-btn" data-mode="cards" title="Карточки"><span class="nav-ico" data-icon="grid"></span></button>
-              <button type="button" class="mode-icon-btn" data-mode="kanban" title="Канбан"><span class="nav-ico" data-icon="kanban"></span></button>
-            </div>
-            <button type="button" class="icon-btn" id="themeToggleMobile" title="Сменить тему">
-              <span class="nav-ico" id="themeIconMobile"></span>
+            <button type="button" class="icon-btn accent-icon-btn" id="openAddModalMobile" title="Добавить запись" aria-label="Добавить запись">
+              <span class="nav-ico" data-icon="plus"></span>
             </button>
-            <button type="button" class="icon-btn" id="refreshBtnMobile" title="Обновить">
+            <button type="button" class="icon-btn" id="viewModeSwitchMobile" title="Вид: Список (нажмите для смены)" aria-label="Сменить вид отображения">
+              <span class="nav-ico" id="viewModeIconMobile" data-icon="list"></span>
+            </button>
+            <button type="button" class="icon-btn" id="refreshBtnMobile" title="Обновить" aria-label="Обновить">
               <span class="nav-ico" data-icon="refresh"></span>
             </button>
-            <button type="button" class="icon-btn danger" id="logoutBtnMobile" title="Выйти">
+            <button type="button" class="icon-btn danger" id="logoutBtnMobile" title="Выйти" aria-label="Выйти">
               <span class="nav-ico" data-icon="logout"></span>
             </button>
           </div>
@@ -116,6 +122,7 @@
           <div class="search-wrap">
             <span class="search-icon" data-icon="search"></span>
             <input type="search" id="searchInput" placeholder="Поиск по названию, автору, описанию..." />
+            <button type="button" id="cmdPaletteTrigger" class="cmd-k-trigger" title="Быстрые команды и переход (Ctrl+K / ⌘K)">⌘K</button>
             <button type="button" id="searchClearBtn" class="search-clear hidden" title="Очистить">✕</button>
           </div>
 
@@ -180,6 +187,7 @@
       </header>
 
       <main class="catalog-container" id="catalogContainer">
+        <div class="status-pills-bar" id="statusPillsBar" aria-label="Быстрый фильтр по статусам"></div>
         <div id="catalogGrid" class="catalog-list view-list"></div>
         <div id="emptyState" class="empty-state hidden">
           <div class="empty-emoji">📖</div>
@@ -214,9 +222,14 @@
   <!-- Детальная шторка (Detail Drawer) -->
   <div id="detailDrawerOverlay" class="drawer-overlay hidden" aria-hidden="true">
     <aside class="detail-drawer" id="detailDrawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
-      <div class="drawer-header">
+      <div class="sheet-handle" id="drawerSheetHandle"></div>
+      <div class="drawer-header" id="drawerHeaderBar">
         <span class="drawer-eyebrow" id="drawerCategoryLabel">Запись</span>
-        <button type="button" class="icon-btn" id="drawerCloseBtn" title="Закрыть">✕</button>
+        <div class="drawer-header-actions">
+          <button type="button" class="icon-btn small-nav-btn" id="drawerPrevBtn" title="Предыдущая запись (←)" aria-label="Предыдущая запись">‹</button>
+          <button type="button" class="icon-btn small-nav-btn" id="drawerNextBtn" title="Следующая запись (→)" aria-label="Следующая запись">›</button>
+          <button type="button" class="icon-btn" id="drawerCloseBtn" title="Закрыть (Esc)">✕</button>
+        </div>
       </div>
       <div class="drawer-body" id="drawerBody"></div>
     </aside>
@@ -272,6 +285,64 @@
 
   <div id="statusPopover" class="liquid-menu hidden" role="listbox" aria-label="Статус"></div>
 
-  <script src="./app.js?v=23"></script>
+  <!-- Модальное окно / Шторка быстрого добавления записи -->
+  <div id="quickAddOverlay" class="drawer-overlay hidden" aria-hidden="true">
+    <div class="quick-add-sheet" id="quickAddSheet" role="dialog" aria-modal="true" aria-labelledby="quickAddTitle">
+      <div class="sheet-handle" id="quickAddHandle"></div>
+      <div class="drawer-header" id="quickAddHeaderBar">
+        <span class="drawer-eyebrow" id="quickAddTitle">Новая запись</span>
+        <button type="button" class="icon-btn" id="quickAddCloseBtn" title="Закрыть">✕</button>
+      </div>
+      <form id="quickAddForm" class="quick-add-body">
+        <div class="quick-add-topics" id="quickAddTopics">
+          <button type="button" class="sheet-pill active" data-add-topic="auto">✨ Авто</button>
+          <button type="button" class="sheet-pill" data-add-topic="movies">🎬 Кино</button>
+          <button type="button" class="sheet-pill" data-add-topic="books">📚 Книги</button>
+          <button type="button" class="sheet-pill" data-add-topic="video">▶️ YouTube</button>
+          <button type="button" class="sheet-pill" data-add-topic="article">📰 Статья</button>
+          <button type="button" class="sheet-pill" data-add-topic="ideas">💡 Идея / Пост</button>
+        </div>
+        <textarea
+          id="quickAddInput"
+          class="quick-add-textarea"
+          rows="3"
+          placeholder="Вставьте ссылку (YouTube, Threads, Кинопоиск, статью), название фильма/книги или заметку с #тегами..."
+          required
+        ></textarea>
+        <div class="quick-add-hint">Бот автоматически найдёт постер, рейтинги IMDb/КП, описание и подберёт ИИ-теги.</div>
+        <div id="quickAddStatus" class="quick-add-status hidden"></div>
+        <div class="quick-add-actions">
+          <button type="button" class="confirm-cancel-btn" id="quickAddCancelBtn">Отмена</button>
+          <button type="submit" class="auth-submit-btn" id="quickAddSubmitBtn">Добавить в базу</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Универсальная палитра команд (Cmd+K / Ctrl+K) -->
+  <div id="cmdPaletteOverlay" class="cmd-overlay hidden" aria-hidden="true">
+    <div class="cmd-modal" id="cmdModal" role="dialog" aria-modal="true" aria-label="Палитра команд">
+      <div class="cmd-input-row">
+        <span class="nav-ico" data-icon="search"></span>
+        <input type="text" id="cmdInput" class="cmd-input" placeholder="Команда или быстрый переход к записи..." autocomplete="off" />
+        <kbd class="kbd-hint">Esc</kbd>
+      </div>
+      <div class="cmd-list" id="cmdList"></div>
+    </div>
+  </div>
+
+  <!-- Просмотр постера во весь экран (Lightbox) -->
+  <div id="posterLightbox" class="lightbox-overlay hidden" aria-hidden="true">
+    <button type="button" class="lightbox-close" id="lightboxCloseBtn" aria-label="Закрыть">✕</button>
+    <img id="lightboxImg" class="lightbox-img" src="" alt="" />
+  </div>
+
+  <!-- Плавающий тост безопасного удаления (Undo Toast) -->
+  <div id="undoToast" class="undo-toast hidden" role="status" aria-live="polite">
+    <span id="undoToastText">Запись удалена</span>
+    <button type="button" id="undoToastBtn" class="undo-toast-btn">Отменить</button>
+  </div>
+
+  <script src="./app.js?v=25"></script>
 </body>
 </html>

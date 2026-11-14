@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.bot.cards import render_card_html
-from app.bot.handlers import handle_update
+from app.bot.handlers import handle_update, ingest_web_item
 from app.bot.keyboards import build_item_keyboard
 from app.bot.telegram_api import TelegramClient
 from app.config import settings
@@ -132,6 +132,15 @@ class LoginPayload(BaseModel):
 class PatchItemPayload(BaseModel):
     status: str | None = None
     user_rating: int | None = None
+    title_ru: str | None = None
+    summary: str | None = None
+    user_note: str | None = None
+    tags: list[str] | None = None
+
+
+class CreateItemPayload(BaseModel):
+    text: str
+    topic: str = "auto"
 
 
 @app.post("/api/login")
@@ -278,6 +287,26 @@ def api_get_item(
         conn.close()
 
 
+@app.post("/api/items")
+def api_create_item(
+    payload: CreateItemPayload,
+    _user: dict[str, Any] = Depends(require_tma_auth),
+) -> dict[str, Any]:
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty text")
+    conn = get_connection()
+    try:
+        res = ingest_web_item(conn, text, topic=payload.topic)
+        if res.get("item_id"):
+            item = repo.get_item(conn, int(res["item_id"]))
+            if item:
+                res["item"] = item
+        return res
+    finally:
+        conn.close()
+
+
 @app.patch("/api/items/{item_id}")
 def api_patch_item(
     item_id: int,
@@ -291,6 +320,10 @@ def api_patch_item(
             item_id,
             status=payload.status,
             user_rating=payload.user_rating,
+            title_ru=payload.title_ru,
+            summary=payload.summary,
+            user_note=payload.user_note,
+            tags=payload.tags,
         )
         if not updated:
             raise HTTPException(status_code=404, detail="Not found")

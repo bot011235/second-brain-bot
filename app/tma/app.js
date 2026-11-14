@@ -41,7 +41,24 @@
     starFilled: `<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z"/></svg>`,
     trash: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/></svg>`,
     chevronDown: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg>`,
+    plus: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`,
+    dice: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="3" ry="3"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor"/></svg>`,
+    edit: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`,
   };
+
+  function withViewTransition(fn) {
+    const canAnimate =
+      typeof document.startViewTransition === "function" &&
+      window.innerWidth > 820 &&
+      !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    if (canAnimate) {
+      try {
+        document.startViewTransition(() => fn());
+        return;
+      } catch {}
+    }
+    fn();
+  }
 
   function hydrateIcons(root = document) {
     root.querySelectorAll("[data-icon]").forEach((el) => {
@@ -86,8 +103,13 @@
     tgChatId: 0,
     drawerItemId: null,
     drawerConfirmDelete: false,
+    drawerEditMode: false,
+    drawerAddTagMode: false,
     statusPopoverItemId: null,
     filtersSheetOpen: false,
+    quickAddOpen: false,
+    cmdPaletteOpen: false,
+    statusCountsByTab: {},
     expandedTagIds: new Set(),
   };
 
@@ -182,10 +204,8 @@
 
     const deskIcon = document.getElementById("themeIconDesktop");
     const deskLabel = document.getElementById("themeLabelDesktop");
-    const mobIcon = document.getElementById("themeIconMobile");
     if (deskIcon) deskIcon.innerHTML = UI_ICONS[iconKey];
     if (deskLabel) deskLabel.textContent = labelText;
-    if (mobIcon) mobIcon.innerHTML = UI_ICONS[iconKey];
 
     if (tg) {
       const bgHex = effective === "dark" ? "#171513" : "#fbf8f3";
@@ -194,6 +214,17 @@
         if (typeof tg.setBackgroundColor === "function") tg.setBackgroundColor(bgHex);
       } catch {}
     }
+  }
+
+  function setThemeMode(mode) {
+    if (!["auto", "light", "dark"].includes(mode)) return;
+    state.themeMode = mode;
+    localStorage.setItem("sb_theme_mode", state.themeMode);
+    applyTheme();
+    if (state.filtersSheetOpen) {
+      renderFiltersSheet();
+    }
+    haptic("selection");
   }
 
   function cycleThemeMode() {
@@ -205,6 +236,9 @@
     }
     localStorage.setItem("sb_theme_mode", state.themeMode);
     applyTheme();
+    if (state.filtersSheetOpen) {
+      renderFiltersSheet();
+    }
     haptic("selection");
   }
 
@@ -213,6 +247,9 @@
       tg.onEvent("themeChanged", () => {
         if (state.themeMode === "auto") {
           applyTheme();
+          if (state.filtersSheetOpen) {
+            renderFiltersSheet();
+          }
         }
       });
     } catch {}
@@ -250,6 +287,8 @@
     } else {
       btn.addEventListener("click", async () => {
         localStorage.removeItem("sb_access_key");
+        localStorage.removeItem("sb_cache_items_v1");
+        localStorage.removeItem("sb_cache_tags_v1");
         try {
           await fetch("/api/logout", { method: "POST" });
         } catch {}
@@ -666,13 +705,49 @@
   // ==================== ДЕТАЛЬНАЯ ШТОРКА (DETAIL DRAWER) ====================
 
   const drawerOverlay = document.getElementById("detailDrawerOverlay");
+  const drawerEl = document.getElementById("detailDrawer");
   const drawerBody = document.getElementById("drawerBody");
   const drawerCategoryLabel = document.getElementById("drawerCategoryLabel");
+  const drawerPrevBtn = document.getElementById("drawerPrevBtn");
+  const drawerNextBtn = document.getElementById("drawerNextBtn");
+  const posterLightbox = document.getElementById("posterLightbox");
+  const lightboxImg = document.getElementById("lightboxImg");
+
+  function openPosterLightbox(url, alt = "") {
+    if (!posterLightbox || !lightboxImg || !url) return;
+    lightboxImg.src = url;
+    lightboxImg.alt = alt;
+    posterLightbox.classList.remove("hidden");
+    posterLightbox.setAttribute("aria-hidden", "false");
+    syncTelegramBackButton();
+  }
+
+  function closePosterLightbox() {
+    if (!posterLightbox || posterLightbox.classList.contains("hidden")) return;
+    posterLightbox.classList.add("hidden");
+    posterLightbox.setAttribute("aria-hidden", "true");
+    if (lightboxImg) lightboxImg.src = "";
+    syncTelegramBackButton();
+  }
+
+  if (posterLightbox) {
+    document.getElementById("lightboxCloseBtn").addEventListener("click", closePosterLightbox);
+    posterLightbox.addEventListener("click", (e) => {
+      if (e.target === posterLightbox) closePosterLightbox();
+    });
+  }
 
   function syncTelegramBackButton() {
     if (!tg || !tg.BackButton) return;
     try {
-      if (state.drawerItemId !== null || state.filtersSheetOpen) {
+      const lightboxOpen = posterLightbox && !posterLightbox.classList.contains("hidden");
+      if (
+        lightboxOpen ||
+        state.cmdPaletteOpen ||
+        state.quickAddOpen ||
+        state.drawerItemId !== null ||
+        state.filtersSheetOpen
+      ) {
         tg.BackButton.show();
       } else {
         tg.BackButton.hide();
@@ -683,13 +758,37 @@
   if (tg && tg.BackButton) {
     try {
       tg.BackButton.onClick(() => {
-        if (state.drawerItemId !== null) {
+        if (posterLightbox && !posterLightbox.classList.contains("hidden")) {
+          closePosterLightbox();
+        } else if (state.cmdPaletteOpen) {
+          closeCmdPalette();
+        } else if (state.quickAddOpen) {
+          closeQuickAddModal();
+        } else if (state.drawerItemId !== null) {
           closeDetailDrawer();
         } else if (state.filtersSheetOpen) {
           closeFiltersSheet();
         }
       });
     } catch {}
+  }
+
+  function extractYouTubeId(url) {
+    if (!url) return "";
+    const m = String(url).match(
+      /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/|embed\/|live\/))([a-zA-Z0-9_-]{11})/
+    );
+    return m ? m[1] : "";
+  }
+
+  function navigateDrawer(delta) {
+    if (state.drawerItemId === null || !state.items.length) return;
+    const idx = state.items.findIndex((i) => Number(i.id) === Number(state.drawerItemId));
+    if (idx === -1) return;
+    const target = state.items[idx + delta];
+    if (target) {
+      openDetailDrawer(target.id);
+    }
   }
 
   function renderDetailDrawer() {
@@ -701,17 +800,21 @@
       return;
     }
 
-    const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+    const idx = state.items.findIndex((i) => Number(i.id) === Number(state.drawerItemId));
+    const item = idx !== -1 ? state.items[idx] : null;
     if (!item) {
       closeDetailDrawer();
       return;
     }
 
+    if (drawerPrevBtn) drawerPrevBtn.disabled = idx <= 0;
+    if (drawerNextBtn) drawerNextBtn.disabled = idx >= state.items.length - 1;
+
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     drawerCategoryLabel.textContent = CATEGORY_TITLES[item.category] || "Запись";
 
     const posterHtml = item.poster_url
-      ? `<img src="${escapeHtml(item.poster_url)}" alt="" />`
+      ? `<img src="${escapeHtml(item.poster_url)}" alt="${escapeHtml(item.title_ru || "")}" data-lightbox-src="${escapeHtml(item.poster_url)}" />`
       : `<span>${emoji}</span>`;
 
     const yearStr = item.release_year ? ` (${item.release_year})` : "";
@@ -729,24 +832,100 @@
     const creatorHtml = subParts.length ? `<div class="drawer-creator">${subParts.join(" · ")}</div>` : "";
 
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: true });
-    const allTags = [...(item.genres || []), ...(item.tags || [])];
-    const tagsHtml = allTags.length
+
+    const genresList = item.genres || [];
+    const userTagsList = item.tags || [];
+    const genrePills = genresList
+      .map((g) => `<span class="genre-pill" data-drawer-tag="${escapeHtml(g)}">#${escapeHtml(g)}</span>`)
+      .join("");
+    const userTagPills = userTagsList
+      .map(
+        (t) =>
+          `<span class="genre-pill" data-drawer-tag="${escapeHtml(t)}">#${escapeHtml(t)}<span class="tag-remove-x" data-remove-tag="${escapeHtml(t)}" title="Удалить тег">×</span></span>`
+      )
+      .join("");
+
+    const datalistOpts = (state.allTags || [])
+      .map((t) => `<option value="${escapeHtml(t.tag)}"></option>`)
+      .join("");
+
+    const tagAddFormHtml = state.drawerAddTagMode
       ? `
-        <div class="drawer-section">
-          <div class="drawer-section-title">Жанры и теги</div>
-          <div class="genres-line">
-            ${allTags.map((g) => `<span class="genre-pill" data-drawer-tag="${escapeHtml(g)}">#${escapeHtml(g)}</span>`).join("")}
-          </div>
+        <div class="drawer-tag-add-row">
+          <input type="text" id="drawerNewTagInput" class="drawer-edit-input drawer-tag-input" list="drawerTagsDatalist" placeholder="Новый тег..." autocomplete="off" />
+          <datalist id="drawerTagsDatalist">${datalistOpts}</datalist>
+          <button type="button" class="liquid-pill drawer-save-note-btn" data-drawer-add-tag-submit="${item.id}">OK</button>
         </div>
       `
       : "";
 
-    const summaryHtml = item.summary
+    const tagsHtml = `
+      <div class="drawer-section">
+        <div class="drawer-section-title">Жанры и теги</div>
+        <div class="genres-line">
+          ${genrePills}
+          ${userTagPills}
+          <button type="button" class="genre-pill drawer-add-tag-pill" data-drawer-add-tag-toggle>+ Тег</button>
+        </div>
+        ${tagAddFormHtml}
+      </div>
+    `;
+
+    const summaryEditHtml = state.drawerEditMode
       ? `
         <div class="drawer-section">
-          <div class="drawer-section-title">Описание и заметка</div>
+          <div class="drawer-section-title">Редактирование карточки</div>
+          <input type="text" id="drawerEditTitleInput" class="drawer-edit-input" value="${escapeHtml(item.title_ru || "")}" placeholder="Название" />
+          <textarea id="drawerEditSummaryInput" class="drawer-note-textarea" rows="4" placeholder="Описание...">${escapeHtml(item.summary || "")}</textarea>
+          <div class="drawer-note-footer">
+            <button type="button" class="confirm-cancel-btn" data-drawer-edit-cancel>Отмена</button>
+            <button type="button" class="liquid-pill drawer-save-note-btn" data-drawer-edit-save="${item.id}">Сохранить</button>
+          </div>
+        </div>
+      `
+      : item.summary
+      ? `
+        <div class="drawer-section">
+          <div class="drawer-section-title">Описание</div>
           <div class="drawer-summary">${linkifyText(item.summary)}</div>
         </div>
+      `
+      : "";
+
+    const userNote = meta.user_note || "";
+    const noteSectionHtml = `
+      <div class="drawer-section">
+        <div class="drawer-section-title">✍️ Моя заметка</div>
+        <textarea id="drawerNoteInput" class="drawer-note-textarea" rows="2" placeholder="Добавить личную заметку, кто посоветовал, мысли...">${escapeHtml(userNote)}</textarea>
+        <div class="drawer-note-footer">
+          <button type="button" class="liquid-pill drawer-save-note-btn" data-drawer-save-note="${item.id}">Сохранить заметку</button>
+        </div>
+      </div>
+    `;
+
+    const ytId = extractYouTubeId(getPrimarySourceUrl(item));
+    const ytSectionHtml = ytId
+      ? `
+        <div class="drawer-section">
+          <button type="button" class="liquid-pill drawer-yt-btn" data-play-yt="${escapeHtml(ytId)}">▶️ Смотреть видео прямо здесь</button>
+          <div id="drawerYtContainer"></div>
+        </div>
+      `
+      : "";
+
+    const sourceLongText = (item.sources || [])
+      .map((s) => (s.raw_text || "").trim())
+      .find((t) => t && !/^https?:\/\/\S+$/i.test(t) && t.length > (item.summary || "").trim().length + 40);
+    const fullReaderText = (item.extracted_text || "").trim() || sourceLongText || "";
+    const readerHtml = fullReaderText
+      ? `
+        <details class="drawer-section drawer-reader-box">
+          <summary class="drawer-reader-summary">
+            <span>📖 Полный текст из источника</span>
+            <span>▾</span>
+          </summary>
+          <div class="drawer-reader-content">${linkifyText(fullReaderText)}</div>
+        </details>
       `
       : "";
 
@@ -778,13 +957,17 @@
       <div class="drawer-hero">
         <div class="drawer-poster">${posterHtml}</div>
         <div style="min-width:0;flex:1;">
-          <h2 class="drawer-title" id="drawerTitle">${escapeHtml(item.title_ru)}${yearStr}</h2>
+          <div class="drawer-title-row">
+            <h2 class="drawer-title" id="drawerTitle">${escapeHtml(item.title_ru)}${yearStr}</h2>
+            <button type="button" class="icon-btn drawer-inline-edit-btn" data-drawer-edit-toggle title="Редактировать название и описание" aria-label="Редактировать">${UI_ICONS.edit}</button>
+          </div>
           ${origLine}
           ${creatorHtml}
         </div>
       </div>
 
       ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
+      ${ytSectionHtml}
 
       <div class="drawer-section">
         <div class="drawer-controls-grid">
@@ -803,7 +986,9 @@
         </div>
       </div>
 
-      ${summaryHtml}
+      ${summaryEditHtml}
+      ${noteSectionHtml}
+      ${readerHtml}
       ${tagsHtml}
 
       <div class="drawer-actions-footer">
@@ -817,11 +1002,34 @@
     syncTelegramBackButton();
   }
 
+  async function hydrateDrawerFullText(itemId) {
+    const idNum = Number(itemId);
+    const localItem = state.items.find((i) => Number(i.id) === idNum);
+    if (!localItem || localItem.extracted_text !== undefined) return;
+    if (!["post", "article", "video", "idea"].includes(localItem.category)) return;
+    try {
+      const res = await fetch(`/api/items/${idNum}`, { headers: authHeaders() });
+      if (!res.ok) return;
+      const fresh = await res.json();
+      const targetIdx = state.items.findIndex((i) => Number(i.id) === idNum);
+      if (targetIdx !== -1) {
+        state.items[targetIdx] = fresh;
+      }
+      const activeInDrawer = drawerBody.contains(document.activeElement);
+      if (Number(state.drawerItemId) === idNum && fresh.extracted_text && !activeInDrawer) {
+        renderDetailDrawer();
+      }
+    } catch {}
+  }
+
   function openDetailDrawer(itemId) {
     closeStatusPopover();
     state.drawerItemId = Number(itemId);
     state.drawerConfirmDelete = false;
+    state.drawerEditMode = false;
+    state.drawerAddTagMode = false;
     renderDetailDrawer();
+    hydrateDrawerFullText(itemId);
     haptic("light");
   }
 
@@ -829,10 +1037,14 @@
     if (state.drawerItemId === null) return;
     state.drawerItemId = null;
     state.drawerConfirmDelete = false;
+    state.drawerEditMode = false;
+    state.drawerAddTagMode = false;
     renderDetailDrawer();
   }
 
   document.getElementById("drawerCloseBtn").addEventListener("click", closeDetailDrawer);
+  if (drawerPrevBtn) drawerPrevBtn.addEventListener("click", () => navigateDrawer(-1));
+  if (drawerNextBtn) drawerNextBtn.addEventListener("click", () => navigateDrawer(1));
   drawerOverlay.addEventListener("click", (e) => {
     if (e.target === drawerOverlay) closeDetailDrawer();
   });
@@ -849,7 +1061,111 @@
     }
   });
 
+  drawerBody.addEventListener("keydown", async (e) => {
+    if (e.target && e.target.id === "drawerNewTagInput" && e.key === "Enter") {
+      e.preventDefault();
+      const submitBtn = drawerBody.querySelector("[data-drawer-add-tag-submit]");
+      if (submitBtn) submitBtn.click();
+    }
+  });
+
   drawerBody.addEventListener("click", async (e) => {
+    const posterImg = e.target.closest("[data-lightbox-src]");
+    if (posterImg) {
+      openPosterLightbox(posterImg.dataset.lightboxSrc, posterImg.alt || "");
+      return;
+    }
+
+    const ytBtn = e.target.closest("[data-play-yt]");
+    if (ytBtn && ytBtn.dataset.playYt) {
+      const ytBox = document.getElementById("drawerYtContainer");
+      if (ytBox) {
+        const vid = encodeURIComponent(ytBtn.dataset.playYt);
+        ytBox.innerHTML = `<div class="drawer-yt-frame"><iframe src="https://www.youtube-nocookie.com/embed/${vid}?autoplay=1" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>`;
+        ytBtn.classList.add("hidden");
+        haptic("light");
+      }
+      return;
+    }
+
+    if (e.target.closest("[data-drawer-edit-toggle]")) {
+      state.drawerEditMode = !state.drawerEditMode;
+      renderDetailDrawer();
+      if (state.drawerEditMode) {
+        setTimeout(() => {
+          const inp = document.getElementById("drawerEditTitleInput");
+          if (inp) inp.focus();
+        }, 20);
+      }
+      return;
+    }
+
+    if (e.target.closest("[data-drawer-edit-cancel]")) {
+      state.drawerEditMode = false;
+      renderDetailDrawer();
+      return;
+    }
+
+    const editSaveBtn = e.target.closest("[data-drawer-edit-save]");
+    if (editSaveBtn) {
+      const id = editSaveBtn.dataset.drawerEditSave;
+      const tInp = document.getElementById("drawerEditTitleInput");
+      const sInp = document.getElementById("drawerEditSummaryInput");
+      state.drawerEditMode = false;
+      await patchItem(id, {
+        title_ru: tInp ? tInp.value : undefined,
+        summary: sInp ? sInp.value : undefined,
+      });
+      return;
+    }
+
+    const saveNoteBtn = e.target.closest("[data-drawer-save-note]");
+    if (saveNoteBtn) {
+      const id = saveNoteBtn.dataset.drawerSaveNote;
+      const noteInp = document.getElementById("drawerNoteInput");
+      saveNoteBtn.textContent = "Сохраняю...";
+      await patchItem(id, { user_note: noteInp ? noteInp.value : "" });
+      return;
+    }
+
+    if (e.target.closest("[data-drawer-add-tag-toggle]")) {
+      state.drawerAddTagMode = !state.drawerAddTagMode;
+      renderDetailDrawer();
+      if (state.drawerAddTagMode) {
+        setTimeout(() => {
+          const inp = document.getElementById("drawerNewTagInput");
+          if (inp) inp.focus();
+        }, 20);
+      }
+      return;
+    }
+
+    const addTagSubmit = e.target.closest("[data-drawer-add-tag-submit]");
+    if (addTagSubmit) {
+      const id = Number(addTagSubmit.dataset.drawerAddTagSubmit);
+      const inp = document.getElementById("drawerNewTagInput");
+      const cleanTag = (inp ? inp.value : "").replace(/^#+/, "").trim().toLowerCase();
+      const item = state.items.find((i) => Number(i.id) === id);
+      if (cleanTag && item) {
+        const nextTags = [...new Set([...(item.tags || []), cleanTag])];
+        state.drawerAddTagMode = false;
+        await patchItem(id, { tags: nextTags });
+      }
+      return;
+    }
+
+    const remTagBtn = e.target.closest("[data-remove-tag]");
+    if (remTagBtn) {
+      e.stopPropagation();
+      const tagToRemove = (remTagBtn.dataset.removeTag || "").toLowerCase();
+      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      if (item && tagToRemove) {
+        const nextTags = (item.tags || []).filter((t) => String(t).toLowerCase() !== tagToRemove);
+        await patchItem(item.id, { tags: nextTags });
+      }
+      return;
+    }
+
     const tagEl = e.target.closest("[data-drawer-tag]");
     if (tagEl) {
       state.tag = tagEl.dataset.drawerTag || "";
@@ -893,6 +1209,7 @@
       { v: "article", l: "📰 Статьи" },
       { v: "ideas", l: "💡 Идеи" },
     ];
+    const tabCounts = state.statusCountsByTab[state.tab || ""] || null;
     const statusOpts = [
       { v: "all", l: "Все" },
       { v: "inbox", l: "📥 Входящие" },
@@ -900,7 +1217,10 @@
       { v: "in_progress", l: "▶️ В процессе" },
       { v: "done", l: "✅ Готово" },
       { v: "dropped", l: "🚫 Брошено" },
-    ];
+    ].map((s) => {
+      const cnt = tabCounts && tabCounts[s.v] != null ? ` (${tabCounts[s.v]})` : "";
+      return { v: s.v, l: `${s.l}${cnt}` };
+    });
     const sortOpts = [
       { v: "created", l: "По дате ↓" },
       { v: "imdb", l: "IMDb / Goodreads ↓" },
@@ -913,6 +1233,15 @@
       { v: "cards", l: "⊞ Карточки" },
       { v: "kanban", l: "▥ Канбан" },
     ];
+    const effectiveTheme = resolveEffectiveTheme();
+    const hasTgAuto = Boolean((tg && tg.colorScheme) || state.themeMode === "auto");
+    const themeOpts = [
+      { v: "light", l: "☀️ Светлая", active: state.themeMode === "light" || (!hasTgAuto && effectiveTheme === "light") },
+      { v: "dark", l: "🌙 Тёмная", active: state.themeMode === "dark" || (!hasTgAuto && effectiveTheme === "dark") },
+    ];
+    if (hasTgAuto) {
+      themeOpts.push({ v: "auto", l: "🌗 Авто (TG)", active: state.themeMode === "auto" });
+    }
     const sortedTags = [...state.allTags].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 
     filtersSheetBody.innerHTML = `
@@ -923,6 +1252,18 @@
             .map(
               (m) =>
                 `<button type="button" class="sheet-pill ${state.viewMode === m.v ? "active" : ""}" data-sheet-mode="${m.v}">${m.l}</button>`
+            )
+            .join("")}
+        </div>
+      </div>
+
+      <div class="drawer-section">
+        <div class="drawer-section-title">Тема оформления</div>
+        <div class="sheet-pills-grid">
+          ${themeOpts
+            .map(
+              (t) =>
+                `<button type="button" class="sheet-pill ${t.active ? "active" : ""}" data-sheet-theme="${t.v}">${t.l}</button>`
             )
             .join("")}
         </div>
@@ -1023,6 +1364,12 @@
     if (modeBtn) {
       setViewMode(modeBtn.dataset.sheetMode);
       renderFiltersSheet();
+      return;
+    }
+
+    const themeBtn = e.target.closest("[data-sheet-theme]");
+    if (themeBtn) {
+      setThemeMode(themeBtn.dataset.sheetTheme);
       return;
     }
 
@@ -1227,6 +1574,9 @@
       subParts.push(`Сезонов: ${Number(meta.seasons_count)}`);
     }
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
+    const noteBadgeHtml = meta.user_note
+      ? `<div class="list-note-badge" title="${escapeHtml(meta.user_note)}">✍️ ${escapeHtml(meta.user_note)}</div>`
+      : "";
     const tagsHtml = buildTagsLineHtml(item, "list-tags", "genre-pill list-tag-pill");
     const cornerSourceHtml = buildCornerSourceHtml(item);
     const desktopActionsHtml = buildCardActionsHtml(item, "list-actions");
@@ -1241,6 +1591,7 @@
           </div>
           ${subParts.length ? `<div class="list-subline">${subParts.join(" · ")}</div>` : ""}
           ${ratingsHtml ? `<div class="list-ratings">${ratingsHtml}</div>` : ""}
+          ${noteBadgeHtml}
           ${tagsHtml}
         </div>
         <div class="list-right">
@@ -1276,6 +1627,9 @@
 
     const genresHtml = buildTagsLineHtml(item, "genres-line", "genre-pill");
 
+    const noteBadgeHtml = meta.user_note
+      ? `<div class="list-note-badge" title="${escapeHtml(meta.user_note)}">✍️ ${escapeHtml(meta.user_note)}</div>`
+      : "";
     const summaryHtml = item.summary ? `<div class="summary-text">${escapeHtml(item.summary)}</div>` : "";
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
     const cornerSourceHtml = buildCornerSourceHtml(item);
@@ -1289,6 +1643,7 @@
             ${origLine}
             ${creatorLine}
             ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
+            ${noteBadgeHtml}
           </div>
         </div>
         ${genresHtml}
@@ -1311,7 +1666,7 @@
     const cornerSourceHtml = buildCornerSourceHtml(item);
 
     return `
-      <article class="kanban-card cat-accent ${catClass}" data-open-id="${item.id}">
+      <article class="kanban-card cat-accent ${catClass}" data-open-id="${item.id}" draggable="true" data-drag-id="${item.id}">
         <div class="kanban-card-top">
           <div class="kanban-poster">${posterHtml}</div>
           <div class="kanban-card-meta">
@@ -1337,7 +1692,7 @@
         const meta = STATUS_META[statusKey];
         const colItems = state.items.filter((i) => (i.status || "inbox") === statusKey);
         return `
-          <section class="kanban-col">
+          <section class="kanban-col" data-kanban-status="${statusKey}">
             <div class="kanban-col-header">
               <div class="kanban-col-title">
                 <span class="kanban-col-ico" style="color:${meta.dot};">${meta.svg}</span>
@@ -1359,12 +1714,98 @@
     return { html, colCount: cols.length };
   }
 
+  function computeStatusCounts(list) {
+    const counts = { all: list.length, inbox: 0, planned: 0, in_progress: 0, done: 0, dropped: 0 };
+    list.forEach((it) => {
+      const k = counts[it.status] !== undefined ? it.status : "inbox";
+      counts[k] += 1;
+    });
+    return counts;
+  }
+
+  function renderStatusPillsBar() {
+    const bar = document.getElementById("statusPillsBar");
+    if (!bar) return;
+    if (state.view !== "catalog") {
+      bar.classList.add("hidden");
+      bar.innerHTML = "";
+      return;
+    }
+    bar.classList.remove("hidden");
+    const tabKey = state.tab || "";
+    const counts = state.statusCountsByTab[tabKey] || computeStatusCounts(state.items);
+    const pills = [
+      { key: "all", label: "Все", svg: "", dot: "var(--muted)" },
+      { key: "inbox", label: STATUS_META.inbox.label, svg: STATUS_META.inbox.svg, dot: STATUS_META.inbox.dot },
+      { key: "planned", label: STATUS_META.planned.label, svg: STATUS_META.planned.svg, dot: STATUS_META.planned.dot },
+      { key: "in_progress", label: STATUS_META.in_progress.label, svg: STATUS_META.in_progress.svg, dot: STATUS_META.in_progress.dot },
+      { key: "done", label: STATUS_META.done.label, svg: STATUS_META.done.svg, dot: STATUS_META.done.dot },
+    ];
+    if (counts.dropped > 0 || state.status === "dropped") {
+      pills.push({
+        key: "dropped",
+        label: STATUS_META.dropped.label,
+        svg: STATUS_META.dropped.svg,
+        dot: STATUS_META.dropped.dot,
+      });
+    }
+
+    const pillsHtml = pills
+      .map((p) => {
+        const isActive = state.status === p.key;
+        const ico = p.svg ? `<span style="display:inline-flex;color:${p.dot};">${p.svg}</span>` : "";
+        const cntText = counts[p.key] != null ? `<span class="status-pill-count">${counts[p.key]}</span>` : "";
+        return `<button type="button" class="status-pill-chip ${isActive ? "active" : ""}" data-status-pill="${p.key}">${ico}<span>${escapeHtml(p.label)}</span>${cntText}</button>`;
+      })
+      .join("");
+
+    const luckyBtnHtml = `<button type="button" class="status-pill-chip lucky-chip" id="luckyBtnBar" title="Выбрать случайную запись из текущего списка">${UI_ICONS.dice}<span>Мне повезёт</span></button>`;
+    bar.innerHTML = pillsHtml + luckyBtnHtml;
+  }
+
+  function renderSkeletonRows(count = 6) {
+    const grid = document.getElementById("catalogGrid");
+    const empty = document.getElementById("emptyState");
+    if (!grid) return;
+    if (empty) empty.classList.add("hidden");
+    grid.className = "catalog-list view-list";
+    grid.innerHTML = Array.from({ length: count })
+      .map(
+        () => `
+        <div class="skeleton-row" aria-hidden="true">
+          <div class="sk-poster"></div>
+          <div class="sk-body">
+            <div class="sk-line w-60"></div>
+            <div class="sk-line w-40"></div>
+            <div class="sk-line w-30"></div>
+          </div>
+        </div>
+      `
+      )
+      .join("");
+  }
+
+  function pickRandomItem() {
+    if (!state.items.length) return;
+    const pool =
+      state.status === "all"
+        ? state.items.filter((i) => i.status === "planned" || i.status === "inbox")
+        : state.items;
+    const candidates = pool.length ? pool : state.items;
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    if (chosen) {
+      haptic("medium");
+      openDetailDrawer(chosen.id);
+    }
+  }
+
   function renderCatalog() {
     const container = document.getElementById("catalogContainer");
     const grid = document.getElementById("catalogGrid");
     const empty = document.getElementById("emptyState");
 
     updateCountLabels(`Найдено записей: ${state.items.length}`, state.items.length);
+    renderStatusPillsBar();
 
     if (!state.items.length) {
       if (container) container.classList.remove("kanban-wide");
@@ -1403,6 +1844,7 @@
     const grid = document.getElementById("catalogGrid");
     const empty = document.getElementById("emptyState");
     if (container) container.classList.remove("kanban-wide");
+    renderStatusPillsBar();
 
     updateCountLabels(`Оригиналов: ${state.originals.length}`, state.originals.length);
 
@@ -1474,9 +1916,15 @@
     localStorage.setItem("sb_view_mode", mode);
     syncNavigationState();
     if (state.view === "catalog") {
-      renderCatalog();
+      withViewTransition(() => renderCatalog());
     }
     haptic("selection");
+  }
+
+  function cycleViewMode() {
+    const order = ["list", "cards", "kanban"];
+    const next = order[(order.indexOf(state.viewMode) + 1) % order.length];
+    setViewMode(next);
   }
 
   function syncNavigationState() {
@@ -1490,12 +1938,27 @@
       btn.classList.toggle("active", (btn.dataset.tab || "") === state.tab);
     });
 
-    document.querySelectorAll("#viewModeSwitchDesktop .mode-btn, #viewModeSwitchMobile .mode-icon-btn").forEach((btn) => {
+    document.querySelectorAll("#viewModeSwitchDesktop .mode-btn").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.mode === state.viewMode);
     });
 
+    const mobModeBtn = document.getElementById("viewModeSwitchMobile");
+    const mobModeIcon = document.getElementById("viewModeIconMobile");
+    const modeMeta = {
+      list: { icon: "list", title: "Вид: Список (нажмите для смены)" },
+      cards: { icon: "grid", title: "Вид: Карточки (нажмите для смены)" },
+      kanban: { icon: "kanban", title: "Вид: Канбан (нажмите для смены)" },
+    }[state.viewMode] || { icon: "list", title: "Вид: Список (нажмите для смены)" };
+    if (mobModeIcon && UI_ICONS[modeMeta.icon]) {
+      mobModeIcon.innerHTML = UI_ICONS[modeMeta.icon];
+    }
+    if (mobModeBtn) {
+      mobModeBtn.title = modeMeta.title;
+      mobModeBtn.setAttribute("aria-label", modeMeta.title);
+      mobModeBtn.classList.toggle("hidden", isOriginals);
+    }
+
     document.getElementById("desktopCatalogControls").classList.toggle("hidden", isOriginals);
-    document.getElementById("viewModeSwitchMobile").classList.toggle("hidden", isOriginals);
     const mobSortWrap = document.getElementById("mobileSortWrap");
     if (mobSortWrap) mobSortWrap.classList.toggle("hidden", isOriginals);
     const mobSortSelect = document.getElementById("mobileSortSelect");
@@ -1542,6 +2005,58 @@
     }
   }
 
+  function isDefaultCatalogQuery() {
+    return (
+      state.view === "catalog" &&
+      state.tab === "" &&
+      state.status === "all" &&
+      state.tag === "" &&
+      state.q === "" &&
+      state.sort === "created"
+    );
+  }
+
+  function saveItemsCache() {
+    try {
+      localStorage.setItem(
+        "sb_cache_items_v1",
+        JSON.stringify({ items: state.items.slice(0, 120), tgChatId: state.tgChatId })
+      );
+    } catch {}
+  }
+
+  function clearCatalogCache() {
+    try {
+      localStorage.removeItem("sb_cache_items_v1");
+    } catch {}
+  }
+
+  let hydratedFromCache = false;
+  function tryHydrateFromCache() {
+    if (hydratedFromCache || !isDefaultCatalogQuery() || state.items.length > 0) return;
+    hydratedFromCache = true;
+    try {
+      const rawItems = localStorage.getItem("sb_cache_items_v1");
+      if (rawItems) {
+        const parsed = JSON.parse(rawItems);
+        if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+          state.items = parsed.items;
+          state.tgChatId = parsed.tgChatId || 0;
+          state.statusCountsByTab[""] = computeStatusCounts(state.items);
+          renderCatalog();
+        }
+      }
+      const rawTags = localStorage.getItem("sb_cache_tags_v1");
+      if (rawTags) {
+        const parsedTags = JSON.parse(rawTags);
+        if (Array.isArray(parsedTags) && parsedTags.length > 0) {
+          state.allTags = parsedTags;
+          renderTagBar();
+        }
+      }
+    } catch {}
+  }
+
   async function loadTags() {
     if (tagsAbort) tagsAbort.abort();
     tagsAbort = new AbortController();
@@ -1555,6 +2070,11 @@
       const data = await res.json();
       if (signal.aborted) return;
       state.allTags = data.tags || [];
+      if (!state.tab) {
+        try {
+          localStorage.setItem("sb_cache_tags_v1", JSON.stringify(state.allTags));
+        } catch {}
+      }
       renderTagBar();
       if (state.filtersSheetOpen) {
         renderFiltersSheet();
@@ -1569,6 +2089,10 @@
     if (itemsAbort) itemsAbort.abort();
     itemsAbort = new AbortController();
     const { signal } = itemsAbort;
+
+    if (state.items.length === 0) {
+      renderSkeletonRows();
+    }
 
     const params = new URLSearchParams();
     if (state.tab) params.set("tab", state.tab);
@@ -1592,6 +2116,12 @@
       if (signal.aborted) return;
       state.items = data.items || [];
       state.tgChatId = data.tg_chat_id || 0;
+      if (state.status === "all" && !state.tag && !state.q) {
+        state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
+      }
+      if (isDefaultCatalogQuery()) {
+        saveItemsCache();
+      }
       renderCatalog();
     } catch (err) {
       if (err && err.name === "AbortError") return;
@@ -1605,6 +2135,7 @@
     if (state.view === "originals") {
       loadOriginals();
     } else {
+      tryHydrateFromCache();
       loadTags();
       loadItems();
     }
@@ -1613,13 +2144,35 @@
   async function patchItem(itemId, payload) {
     const numId = Number(itemId);
     const idx = state.items.findIndex((i) => Number(i.id) === numId);
-    const prevSnapshot = idx !== -1 ? { ...state.items[idx] } : null;
+    const prevSnapshot = idx !== -1 ? JSON.parse(JSON.stringify(state.items[idx])) : null;
 
     // Оптимистично обновляем UI мгновенно
     if (idx !== -1) {
-      if (payload.status !== undefined) state.items[idx].status = payload.status;
+      const target = state.items[idx];
+      if (payload.status !== undefined) target.status = payload.status;
       if (payload.user_rating !== undefined) {
-        state.items[idx].user_rating = payload.user_rating === 0 ? null : Number(payload.user_rating);
+        target.user_rating = payload.user_rating === 0 ? null : Number(payload.user_rating);
+      }
+      if (payload.title_ru !== undefined && payload.title_ru.trim()) {
+        target.title_ru = payload.title_ru.trim();
+      }
+      if (payload.summary !== undefined) {
+        target.summary = payload.summary.trim() || null;
+      }
+      if (payload.tags !== undefined) {
+        target.tags = [...payload.tags];
+      }
+      if (payload.user_note !== undefined) {
+        const metaObj = parseMeta(target.meta);
+        if (payload.user_note.trim()) {
+          metaObj.user_note = payload.user_note.trim();
+        } else {
+          delete metaObj.user_note;
+        }
+        target.meta = metaObj;
+      }
+      if (state.status === "all" && !state.tag && !state.q) {
+        state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
       }
       renderCatalog();
     }
@@ -1642,7 +2195,14 @@
       const freshIdx = state.items.findIndex((i) => Number(i.id) === numId);
       if (freshIdx !== -1) {
         state.items[freshIdx] = updated;
+        if (state.status === "all" && !state.tag && !state.q) {
+          state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
+        }
+        if (isDefaultCatalogQuery()) saveItemsCache();
         renderCatalog();
+      }
+      if (payload.tags !== undefined) {
+        loadTags();
       }
       haptic("light");
     } else if (prevSnapshot && idx !== -1) {
@@ -1651,44 +2211,139 @@
     }
   }
 
-  async function deleteItem(itemId) {
-    const numId = Number(itemId);
-    const res = await fetch(`/api/items/${numId}`, {
+  // ==================== БЕЗОПАСНОЕ УДАЛЕНИЕ С UNDO-ТОСТОМ ====================
+
+  const undoToastEl = document.getElementById("undoToast");
+  const undoToastText = document.getElementById("undoToastText");
+  const undoToastBtn = document.getElementById("undoToastBtn");
+  let pendingDelete = null;
+
+  async function commitPendingDelete(entry) {
+    if (!entry) return;
+    if (entry.type === "orig") {
+      const res = await fetch(`/api/originals/${entry.id}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+        keepalive: true,
+      });
+      if (res.status === 401 || res.status === 403) {
+        showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+        return;
+      }
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const deletedIds = new Set((data.deleted_item_ids || []).map(Number));
+        if (deletedIds.size > 0) {
+          state.items = state.items.filter((i) => !deletedIds.has(Number(i.id)));
+          if (state.view === "catalog") renderCatalog();
+        }
+        clearCatalogCache();
+      }
+      return;
+    }
+
+    const res = await fetch(`/api/items/${entry.id}`, {
       method: "DELETE",
       headers: authHeaders(),
+      keepalive: true,
     });
     if (res.status === 401 || res.status === 403) {
       showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
       return;
     }
     if (res.ok) {
-      state.items = state.items.filter((i) => Number(i.id) !== numId);
-      renderCatalog();
+      clearCatalogCache();
       loadTags();
-      haptic("medium");
     }
+  }
+
+  function flushPendingDelete() {
+    if (!pendingDelete) return;
+    const entry = pendingDelete;
+    pendingDelete = null;
+    clearTimeout(entry.timer);
+    if (undoToastEl) undoToastEl.classList.add("hidden");
+    commitPendingDelete(entry);
+  }
+
+  function showUndoToast(label, entry) {
+    pendingDelete = entry;
+    if (undoToastText) undoToastText.textContent = label;
+    if (undoToastEl) undoToastEl.classList.remove("hidden");
+    entry.timer = setTimeout(() => {
+      if (pendingDelete === entry) {
+        flushPendingDelete();
+      }
+    }, 5000);
+  }
+
+  if (undoToastBtn) {
+    undoToastBtn.addEventListener("click", () => {
+      if (!pendingDelete) return;
+      const entry = pendingDelete;
+      pendingDelete = null;
+      clearTimeout(entry.timer);
+      if (undoToastEl) undoToastEl.classList.add("hidden");
+      if (entry.type === "orig") {
+        const insertAt = Math.min(entry.index, state.originals.length);
+        state.originals.splice(insertAt, 0, entry.snapshot);
+        renderOriginals();
+      } else {
+        const insertAt = Math.min(entry.index, state.items.length);
+        state.items.splice(insertAt, 0, entry.snapshot);
+        if (state.status === "all" && !state.tag && !state.q) {
+          state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
+        }
+        renderCatalog();
+      }
+      haptic("light");
+    });
+  }
+
+  window.addEventListener("pagehide", flushPendingDelete);
+
+  async function deleteItem(itemId) {
+    const numId = Number(itemId);
+    const idx = state.items.findIndex((i) => Number(i.id) === numId);
+    if (idx === -1) return;
+    flushPendingDelete();
+
+    const snapshot = state.items[idx];
+    state.items.splice(idx, 1);
+    if (state.status === "all" && !state.tag && !state.q) {
+      state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
+    }
+    renderCatalog();
+    haptic("medium");
+
+    const shortTitle = (snapshot.title_ru || "Запись").slice(0, 28);
+    showUndoToast(`«${shortTitle}» удалена`, {
+      type: "item",
+      id: numId,
+      index: idx,
+      snapshot,
+      timer: null,
+    });
   }
 
   async function deleteOriginal(origId) {
     const numId = Number(origId);
-    const res = await fetch(`/api/originals/${numId}`, {
-      method: "DELETE",
-      headers: authHeaders(),
+    const idx = state.originals.findIndex((o) => Number(o.id) === numId);
+    if (idx === -1) return;
+    flushPendingDelete();
+
+    const snapshot = state.originals[idx];
+    state.originals.splice(idx, 1);
+    renderOriginals();
+    haptic("medium");
+
+    showUndoToast("Оригинал удалён", {
+      type: "orig",
+      id: numId,
+      index: idx,
+      snapshot,
+      timer: null,
     });
-    if (res.status === 401 || res.status === 403) {
-      showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
-      return;
-    }
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}));
-      const deletedIds = new Set((data.deleted_item_ids || []).map(Number));
-      state.originals = state.originals.filter((o) => Number(o.id) !== numId);
-      if (deletedIds.size > 0) {
-        state.items = state.items.filter((i) => !deletedIds.has(Number(i.id)));
-      }
-      renderOriginals();
-      haptic("medium");
-    }
   }
 
   function enableCarouselTouchScroll(el) {
@@ -1754,10 +2409,7 @@
     const btn = e.target.closest("[data-mode]");
     if (btn) setViewMode(btn.dataset.mode);
   });
-  document.getElementById("viewModeSwitchMobile").addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-mode]");
-    if (btn) setViewMode(btn.dataset.mode);
-  });
+  document.getElementById("viewModeSwitchMobile").addEventListener("click", cycleViewMode);
 
   document.getElementById("statusFilterSelect").addEventListener("change", (e) => {
     state.status = e.target.value || "all";
@@ -1804,11 +2456,17 @@
 
   const searchInput = document.getElementById("searchInput");
   const searchClearBtn = document.getElementById("searchClearBtn");
+  const searchWrapEl = searchInput ? searchInput.closest(".search-wrap") : null;
   let searchTimer = null;
+
+  function syncSearchQueryState(val) {
+    if (searchClearBtn) searchClearBtn.classList.toggle("hidden", !val);
+    if (searchWrapEl) searchWrapEl.classList.toggle("has-query", Boolean(val));
+  }
 
   searchInput.addEventListener("input", (e) => {
     const val = e.target.value;
-    searchClearBtn.classList.toggle("hidden", !val);
+    syncSearchQueryState(val);
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
       state.q = val.trim();
@@ -1822,7 +2480,7 @@
 
   searchClearBtn.addEventListener("click", () => {
     searchInput.value = "";
-    searchClearBtn.classList.add("hidden");
+    syncSearchQueryState("");
     state.q = "";
     if (state.view === "originals") {
       loadOriginals();
@@ -1833,11 +2491,482 @@
   });
 
   document.getElementById("themeToggleDesktop").addEventListener("click", cycleThemeMode);
-  document.getElementById("themeToggleMobile").addEventListener("click", cycleThemeMode);
   document.getElementById("refreshBtnDesktop").addEventListener("click", refreshCurrentView);
   document.getElementById("refreshBtnMobile").addEventListener("click", refreshCurrentView);
 
+  const statusPillsBarEl = document.getElementById("statusPillsBar");
+  if (statusPillsBarEl) {
+    statusPillsBarEl.addEventListener("click", (e) => {
+      if (e.target.closest("#luckyBtnBar")) {
+        pickRandomItem();
+        return;
+      }
+      const stPill = e.target.closest("[data-status-pill]");
+      if (stPill) {
+        state.status = stPill.dataset.statusPill || "all";
+        const sel = document.getElementById("statusFilterSelect");
+        if (sel) sel.value = state.status;
+        syncNavigationState();
+        withViewTransition(() => loadItems());
+        haptic("selection");
+      }
+    });
+    enableCarouselTouchScroll(statusPillsBarEl);
+  }
+
   const catalogGridEl = document.getElementById("catalogGrid");
+
+  // ==================== KANBAN DRAG & DROP ====================
+  let draggedKanbanId = null;
+
+  catalogGridEl.addEventListener("dragstart", (e) => {
+    const card = e.target.closest(".kanban-card[data-drag-id]");
+    if (!card) return;
+    draggedKanbanId = Number(card.dataset.dragId);
+    card.classList.add("dragging");
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", String(draggedKanbanId));
+    }
+  });
+
+  catalogGridEl.addEventListener("dragend", (e) => {
+    const card = e.target.closest(".kanban-card[data-drag-id]");
+    if (card) card.classList.remove("dragging");
+    draggedKanbanId = null;
+    catalogGridEl.querySelectorAll(".kanban-col.drag-over").forEach((c) => c.classList.remove("drag-over"));
+  });
+
+  catalogGridEl.addEventListener("dragover", (e) => {
+    if (!draggedKanbanId) return;
+    const col = e.target.closest(".kanban-col[data-kanban-status]");
+    if (!col) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    catalogGridEl.querySelectorAll(".kanban-col.drag-over").forEach((c) => {
+      if (c !== col) c.classList.remove("drag-over");
+    });
+    col.classList.add("drag-over");
+  });
+
+  catalogGridEl.addEventListener("dragleave", (e) => {
+    const col = e.target.closest(".kanban-col[data-kanban-status]");
+    if (col && !col.contains(e.relatedTarget)) {
+      col.classList.remove("drag-over");
+    }
+  });
+
+  catalogGridEl.addEventListener("drop", async (e) => {
+    const col = e.target.closest(".kanban-col[data-kanban-status]");
+    if (!col) return;
+    e.preventDefault();
+    col.classList.remove("drag-over");
+    const targetStatus = col.dataset.kanbanStatus;
+    const dropId = draggedKanbanId || Number(e.dataTransfer && e.dataTransfer.getData("text/plain"));
+    draggedKanbanId = null;
+    if (dropId && targetStatus) {
+      const existing = state.items.find((i) => Number(i.id) === Number(dropId));
+      if (existing && (existing.status || "inbox") !== targetStatus) {
+        await patchItem(dropId, { status: targetStatus });
+      }
+    }
+  });
+
+  // ==================== QUICK ADD MODAL ====================
+  const quickAddOverlay = document.getElementById("quickAddOverlay");
+  const quickAddSheet = document.getElementById("quickAddSheet");
+  const quickAddForm = document.getElementById("quickAddForm");
+  const quickAddInput = document.getElementById("quickAddInput");
+  const quickAddTopics = document.getElementById("quickAddTopics");
+  const quickAddStatus = document.getElementById("quickAddStatus");
+  const quickAddSubmitBtn = document.getElementById("quickAddSubmitBtn");
+  let selectedAddTopic = "auto";
+
+  function openQuickAddModal() {
+    closeStatusPopover();
+    closeFiltersSheet();
+    closeCmdPalette();
+    state.quickAddOpen = true;
+    const tabMap = { movies: "movies", books: "books", video: "video", article: "article", ideas: "ideas" };
+    selectedAddTopic = tabMap[state.tab] || "auto";
+    if (quickAddTopics) {
+      quickAddTopics.querySelectorAll("[data-add-topic]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.addTopic === selectedAddTopic);
+      });
+    }
+    if (quickAddStatus) {
+      quickAddStatus.textContent = "";
+      quickAddStatus.classList.add("hidden");
+      quickAddStatus.classList.remove("error");
+    }
+    if (quickAddOverlay) {
+      quickAddOverlay.classList.remove("hidden");
+      quickAddOverlay.setAttribute("aria-hidden", "false");
+    }
+    syncTelegramBackButton();
+    setTimeout(() => quickAddInput && quickAddInput.focus(), 60);
+    haptic("light");
+  }
+
+  function closeQuickAddModal() {
+    if (!state.quickAddOpen) return;
+    state.quickAddOpen = false;
+    if (quickAddOverlay) {
+      quickAddOverlay.classList.add("hidden");
+      quickAddOverlay.setAttribute("aria-hidden", "true");
+    }
+    syncTelegramBackButton();
+  }
+
+  const openAddDeskBtn = document.getElementById("openAddModalDesktop");
+  const openAddMobBtn = document.getElementById("openAddModalMobile");
+  if (openAddDeskBtn) openAddDeskBtn.addEventListener("click", openQuickAddModal);
+  if (openAddMobBtn) openAddMobBtn.addEventListener("click", openQuickAddModal);
+  if (document.getElementById("quickAddCloseBtn")) {
+    document.getElementById("quickAddCloseBtn").addEventListener("click", closeQuickAddModal);
+  }
+  if (document.getElementById("quickAddCancelBtn")) {
+    document.getElementById("quickAddCancelBtn").addEventListener("click", closeQuickAddModal);
+  }
+  if (quickAddOverlay) {
+    quickAddOverlay.addEventListener("click", (e) => {
+      if (e.target === quickAddOverlay) closeQuickAddModal();
+    });
+  }
+  if (quickAddTopics) {
+    quickAddTopics.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-add-topic]");
+      if (!btn) return;
+      selectedAddTopic = btn.dataset.addTopic || "auto";
+      quickAddTopics.querySelectorAll("[data-add-topic]").forEach((b) => {
+        b.classList.toggle("active", b === btn);
+      });
+      haptic("selection");
+    });
+  }
+  if (quickAddForm) {
+    quickAddForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const rawText = (quickAddInput ? quickAddInput.value : "").trim();
+      if (!rawText) return;
+      if (quickAddSubmitBtn) {
+        quickAddSubmitBtn.disabled = true;
+        quickAddSubmitBtn.textContent = "Обработка...";
+      }
+      if (quickAddStatus) {
+        quickAddStatus.textContent = "Ищу данные, рейтинги и теги...";
+        quickAddStatus.classList.remove("hidden", "error");
+      }
+      try {
+        const res = await fetch("/api/items", {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ text: rawText, topic: selectedAddTopic }),
+        });
+        if (res.status === 401 || res.status === 403) {
+          closeQuickAddModal();
+          showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (quickAddStatus) {
+            quickAddStatus.textContent = data.detail || "Не удалось добавить запись.";
+            quickAddStatus.classList.remove("hidden");
+            quickAddStatus.classList.add("error");
+          }
+          return;
+        }
+        if (quickAddInput) quickAddInput.value = "";
+        clearCatalogCache();
+        closeQuickAddModal();
+        state.view = "catalog";
+        refreshCurrentView();
+        haptic("medium");
+      } catch {
+        if (quickAddStatus) {
+          quickAddStatus.textContent = "Ошибка сети при сохранении.";
+          quickAddStatus.classList.remove("hidden");
+          quickAddStatus.classList.add("error");
+        }
+      } finally {
+        if (quickAddSubmitBtn) {
+          quickAddSubmitBtn.disabled = false;
+          quickAddSubmitBtn.textContent = "Добавить в базу";
+        }
+      }
+    });
+  }
+
+  // ==================== COMMAND PALETTE (CMD+K / CTRL+K) ====================
+  const cmdOverlay = document.getElementById("cmdPaletteOverlay");
+  const cmdInput = document.getElementById("cmdInput");
+  const cmdList = document.getElementById("cmdList");
+  const cmdTrigger = document.getElementById("cmdPaletteTrigger");
+  let cmdActiveIndex = 0;
+  let cmdEntries = [];
+
+  function buildCmdEntries(query) {
+    const q = (query || "").trim().toLowerCase();
+    const actions = [
+      { id: "act-add", group: "Действия", label: "➕ Добавить запись", sub: "Клавиша N", run: () => openQuickAddModal() },
+      { id: "act-lucky", group: "Действия", label: "🎲 Мне повезёт", sub: "Случайный выбор", run: () => pickRandomItem() },
+      { id: "act-list", group: "Вид", label: "☰ Вид: Список", sub: "", run: () => setViewMode("list") },
+      { id: "act-cards", group: "Вид", label: "⊞ Вид: Карточки", sub: "", run: () => setViewMode("cards") },
+      { id: "act-kanban", group: "Вид", label: "▥ Вид: Канбан", sub: "", run: () => setViewMode("kanban") },
+      { id: "act-theme", group: "Настройки", label: "🌗 Сменить тему (Бумага / Чернила)", sub: "", run: () => cycleThemeMode() },
+      { id: "act-cat-all", group: "Категории", label: "📚 Все записи", sub: "", run: () => { state.view = "catalog"; state.tab = ""; refreshCurrentView(); } },
+      { id: "act-cat-movies", group: "Категории", label: "🎬 Кино и сериалы", sub: "", run: () => { state.view = "catalog"; state.tab = "movies"; refreshCurrentView(); } },
+      { id: "act-cat-books", group: "Категории", label: "📚 Книги", sub: "", run: () => { state.view = "catalog"; state.tab = "books"; refreshCurrentView(); } },
+      { id: "act-cat-orig", group: "Разделы", label: "📥 Открыть Оригиналы", sub: "", run: () => { state.view = "originals"; refreshCurrentView(); } },
+    ];
+    const filteredActions = q
+      ? actions.filter((a) => a.label.toLowerCase().includes(q))
+      : actions.slice(0, 6);
+
+    const matchedItems = state.items
+      .filter((it) => {
+        if (!q) return false;
+        const hay = `${it.title_ru || ""} ${it.title_orig || ""} ${it.creator || ""}`.toLowerCase();
+        return hay.includes(q);
+      })
+      .slice(0, 8)
+      .map((it) => ({
+        id: `item-${it.id}`,
+        group: "Записи",
+        label: `${CATEGORY_EMOJI[it.category] || "📌"} ${it.title_ru || "Без названия"}`,
+        sub: (STATUS_META[it.status] || STATUS_META.inbox).label,
+        run: () => openDetailDrawer(it.id),
+      }));
+
+    return [...matchedItems, ...filteredActions];
+  }
+
+  function renderCmdList() {
+    if (!cmdList) return;
+    cmdEntries = buildCmdEntries(cmdInput ? cmdInput.value : "");
+    if (cmdActiveIndex >= cmdEntries.length) cmdActiveIndex = Math.max(0, cmdEntries.length - 1);
+    if (!cmdEntries.length) {
+      cmdList.innerHTML = `<div class="cmd-group-label">Ничего не найдено</div>`;
+      return;
+    }
+    let lastGroup = "";
+    cmdList.innerHTML = cmdEntries
+      .map((entry, idx) => {
+        const hdr = entry.group !== lastGroup ? `<div class="cmd-group-label">${escapeHtml(entry.group)}</div>` : "";
+        lastGroup = entry.group;
+        return `${hdr}<button type="button" class="cmd-item ${idx === cmdActiveIndex ? "active" : ""}" data-cmd-idx="${idx}"><span>${escapeHtml(entry.label)}</span><span class="cmd-item-sub">${escapeHtml(entry.sub)}</span></button>`;
+      })
+      .join("");
+  }
+
+  function openCmdPalette() {
+    closeStatusPopover();
+    state.cmdPaletteOpen = true;
+    cmdActiveIndex = 0;
+    if (cmdInput) cmdInput.value = "";
+    renderCmdList();
+    if (cmdOverlay) {
+      cmdOverlay.classList.remove("hidden");
+      cmdOverlay.setAttribute("aria-hidden", "false");
+    }
+    syncTelegramBackButton();
+    setTimeout(() => cmdInput && cmdInput.focus(), 30);
+  }
+
+  function closeCmdPalette() {
+    if (!state.cmdPaletteOpen) return;
+    state.cmdPaletteOpen = false;
+    if (cmdOverlay) {
+      cmdOverlay.classList.add("hidden");
+      cmdOverlay.setAttribute("aria-hidden", "true");
+    }
+    syncTelegramBackButton();
+  }
+
+  if (cmdTrigger) cmdTrigger.addEventListener("click", openCmdPalette);
+  if (cmdOverlay) {
+    cmdOverlay.addEventListener("click", (e) => {
+      if (e.target === cmdOverlay) closeCmdPalette();
+    });
+  }
+  if (cmdInput) {
+    cmdInput.addEventListener("input", () => {
+      cmdActiveIndex = 0;
+      renderCmdList();
+    });
+    cmdInput.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (cmdEntries.length) {
+          cmdActiveIndex = (cmdActiveIndex + 1) % cmdEntries.length;
+          renderCmdList();
+        }
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (cmdEntries.length) {
+          cmdActiveIndex = (cmdActiveIndex - 1 + cmdEntries.length) % cmdEntries.length;
+          renderCmdList();
+        }
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const chosen = cmdEntries[cmdActiveIndex];
+        if (chosen) {
+          closeCmdPalette();
+          chosen.run();
+        }
+      }
+    });
+  }
+  if (cmdList) {
+    cmdList.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-cmd-idx]");
+      if (!btn) return;
+      const entry = cmdEntries[Number(btn.dataset.cmdIdx)];
+      if (entry) {
+        closeCmdPalette();
+        entry.run();
+      }
+    });
+  }
+
+  // ==================== СВАЙПЫ ШТОРОК ВНИЗ И СТРОК В МОБИЛЬНОЙ ВЕРСИИ ====================
+  function bindSheetSwipeToClose(sheetEl, onClose, options = {}) {
+    if (!sheetEl) return;
+    let startY = 0;
+    let deltaY = 0;
+    let active = false;
+
+    sheetEl.addEventListener(
+      "touchstart",
+      (e) => {
+        if (window.innerWidth > 820 || e.touches.length !== 1) return;
+        const scroller = options.scrollEl ? options.scrollEl() : null;
+        const inHandle = Boolean(e.target.closest(".sheet-handle, .drawer-header"));
+        if (scroller && scroller.scrollTop > 2 && !inHandle) return;
+        startY = e.touches[0].clientY;
+        deltaY = 0;
+        active = true;
+      },
+      { passive: true }
+    );
+
+    sheetEl.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!active || e.touches.length !== 1) return;
+        const dy = e.touches[0].clientY - startY;
+        if (dy > 0) {
+          deltaY = dy;
+          sheetEl.style.transition = "none";
+          sheetEl.style.transform = `translateY(${Math.min(dy, 260)}px)`;
+        }
+      },
+      { passive: true }
+    );
+
+    const finish = () => {
+      if (!active) return;
+      active = false;
+      sheetEl.style.transition = "";
+      sheetEl.style.transform = "";
+      if (deltaY > 75) {
+        onClose();
+      }
+      deltaY = 0;
+    };
+    sheetEl.addEventListener("touchend", finish, { passive: true });
+    sheetEl.addEventListener("touchcancel", finish, { passive: true });
+  }
+
+  bindSheetSwipeToClose(drawerEl, closeDetailDrawer, { scrollEl: () => drawerBody });
+  bindSheetSwipeToClose(document.getElementById("filtersSheet"), closeFiltersSheet, {
+    scrollEl: () => filtersSheetBody,
+  });
+  bindSheetSwipeToClose(quickAddSheet, closeQuickAddModal);
+
+  (function bindMobileRowSwipe() {
+    let rowEl = null;
+    let itemId = null;
+    let startX = 0;
+    let startY = 0;
+    let currentDx = 0;
+    let locked = null;
+
+    catalogGridEl.addEventListener(
+      "touchstart",
+      (e) => {
+        if (window.innerWidth > 820 || state.view !== "catalog" || state.viewMode !== "list") return;
+        if (e.touches.length !== 1) return;
+        const x = e.touches[0].clientX;
+        if (x < 28 || x > window.innerWidth - 28) return;
+        if (e.target.closest("a, button, select, option, .list-tags")) return;
+        const row = e.target.closest(".list-row[data-open-id]");
+        if (!row) return;
+        rowEl = row;
+        itemId = Number(row.dataset.openId);
+        startX = x;
+        startY = e.touches[0].clientY;
+        currentDx = 0;
+        locked = null;
+      },
+      { passive: true }
+    );
+
+    catalogGridEl.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!rowEl || e.touches.length !== 1) return;
+        const dx = e.touches[0].clientX - startX;
+        const dy = e.touches[0].clientY - startY;
+        if (locked === null) {
+          if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+          if (Math.abs(dx) > Math.abs(dy) * 1.8) {
+            locked = "x";
+            rowEl.classList.add("swiping");
+          } else {
+            locked = "y";
+            rowEl = null;
+            return;
+          }
+        }
+        if (locked === "x") {
+          currentDx = Math.max(-120, Math.min(120, dx));
+          rowEl.style.transform = `translateX(${currentDx}px)`;
+        }
+      },
+      { passive: true }
+    );
+
+    const endSwipe = () => {
+      if (!rowEl) return;
+      const targetRow = rowEl;
+      const targetId = itemId;
+      const dx = currentDx;
+      const wasLockedX = locked === "x";
+      rowEl = null;
+      itemId = null;
+      currentDx = 0;
+      locked = null;
+      targetRow.classList.remove("swiping");
+      targetRow.style.transform = "";
+      if (!wasLockedX || !targetId) return;
+
+      if (dx > 75) {
+        const order = ["inbox", "planned", "in_progress", "done"];
+        const it = state.items.find((i) => Number(i.id) === targetId);
+        const curStatus = (it && it.status) || "inbox";
+        const idx = order.indexOf(curStatus);
+        const nextStatus = order[(idx === -1 ? 0 : idx + 1) % order.length];
+        patchItem(targetId, { status: nextStatus });
+      } else if (dx < -75) {
+        deleteItem(targetId);
+      }
+    };
+
+    catalogGridEl.addEventListener("touchend", endSwipe, { passive: true });
+    catalogGridEl.addEventListener("touchcancel", endSwipe, { passive: true });
+  })();
 
   catalogGridEl.addEventListener("click", (e) => {
     const stBtn = e.target.closest("[data-action='status-menu']");
@@ -1906,17 +3035,46 @@
   });
 
   document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      if (state.cmdPaletteOpen) closeCmdPalette();
+      else openCmdPalette();
+      return;
+    }
+
     if (e.key === "Escape") {
       closeStatusPopover();
+      closePosterLightbox();
+      closeCmdPalette();
+      closeQuickAddModal();
       closeDetailDrawer();
       closeFiltersSheet();
       return;
     }
-    if (e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      const tag = (document.activeElement && document.activeElement.tagName || "").toLowerCase();
-      if (tag !== "input" && tag !== "textarea" && tag !== "select") {
+
+    const activeTag = (document.activeElement && document.activeElement.tagName || "").toLowerCase();
+    const isTyping = activeTag === "input" || activeTag === "textarea" || activeTag === "select";
+
+    if (state.drawerItemId !== null && !isTyping) {
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        navigateDrawer(-1);
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        navigateDrawer(1);
+        return;
+      }
+    }
+
+    if (!isTyping && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (e.key === "/") {
         e.preventDefault();
         searchInput.focus();
+      } else if (e.key.toLowerCase() === "n" && !state.quickAddOpen && !state.cmdPaletteOpen) {
+        e.preventDefault();
+        openQuickAddModal();
       }
     }
   });

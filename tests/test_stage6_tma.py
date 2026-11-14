@@ -293,6 +293,97 @@ class TestStage6TMA(unittest.TestCase):
             settings.web_admin_username = old_admin_user
             settings.web_admin_password = old_admin_pwd
 
+    def test_update_fields_and_web_ingest_endpoints(self) -> None:
+        from unittest.mock import patch
+        import app.main as main_mod
+        from app.config import settings
+        from app.bot.handlers import ingest_web_item
+
+        conn = get_connection(":memory:")
+        apply_migrations(conn)
+
+        class _NoCloseConn:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def execute(self, *args, **kwargs):
+                return self._inner.execute(*args, **kwargs)
+
+            def commit(self):
+                return self._inner.commit()
+
+            def close(self):
+                return None
+
+        old_llm_ideas = settings.llm_for_ideas
+        settings.llm_for_ideas = False
+        try:
+            # 1. Расширенное обновление полей, заметок и тегов + get_item c extracted_text
+            created = repo.create_item(
+                conn,
+                category="article",
+                title_ru="Исходный заголовок",
+                canonical_url="https://example.com/post-1",
+                summary="Короткое описание",
+                tags=["статья"],
+            )
+            repo.create_original_message(
+                conn,
+                topic_slug="article",
+                raw_text="https://example.com/post-1",
+                source_url="https://example.com/post-1",
+                source_type="web",
+                extracted_text="Полный текст статьи из оригинала для режима чтения.",
+            )
+
+            updated = repo.update_item_fields(
+                conn,
+                created["id"],
+                status="planned",
+                user_rating=9,
+                title_ru="Обновлённый заголовок",
+                summary="Новое описание для теста",
+                user_note="Прочитать в воскресенье утром",
+                tags=["лонгрид", "ui"],
+            )
+            self.assertIsNotNone(updated)
+            assert updated is not None
+            self.assertEqual(updated["title_ru"], "Обновлённый заголовок")
+            self.assertEqual(updated["status"], "planned")
+            self.assertEqual(updated["user_rating"], 9)
+            self.assertEqual(updated["tags"], ["ui", "лонгрид"])
+            self.assertEqual(updated["extracted_text"], "Полный текст статьи из оригинала для режима чтения.")
+            meta_obj = json.loads(updated["meta"])
+            self.assertEqual(meta_obj.get("user_note"), "Прочитать в воскресенье утром")
+
+            # Проверяем пересборку FTS5-индекса после смены заголовка и тега
+            fts_hits = repo.list_items_catalog(conn, q="Обновлённый")
+            self.assertEqual([it["id"] for it in fts_hits], [created["id"]])
+
+            # 2. Прямое добавление идеи с веб-витрины через ingest_web_item + POST /api/items и PATCH /api/items/{id}
+            res_idea = ingest_web_item(conn, "Сделать дашборд #ui #продуктивность", topic="ideas")
+            self.assertEqual(res_idea["status"], "created")
+            self.assertTrue(res_idea.get("item_id"))
+
+            wrapped = _NoCloseConn(conn)
+            with patch.object(main_mod, "get_connection", return_value=wrapped):
+                post_data = main_mod.api_create_item(
+                    main_mod.CreateItemPayload(text="Быстрая заметка #тест", topic="ideas"),
+                    _user={"id": 349407845},
+                )
+                self.assertEqual(post_data["status"], "created")
+                new_id = post_data["item"]["id"]
+
+                patch_data = main_mod.api_patch_item(
+                    new_id,
+                    main_mod.PatchItemPayload(user_note="Проверить вечером", tags=["тест", "заметка"]),
+                    _user={"id": 349407845},
+                )
+                self.assertEqual(patch_data["tags"], ["заметка", "тест"])
+                self.assertEqual(json.loads(patch_data["meta"])["user_note"], "Проверить вечером")
+        finally:
+            settings.llm_for_ideas = old_llm_ideas
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

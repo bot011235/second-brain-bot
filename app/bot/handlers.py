@@ -168,6 +168,7 @@ def _handle_movie_text(
     source_url: str | None = None,
     source_type: str = "manual",
     title_orig: str | None = None,
+    auto_pick_first: bool = False,
 ) -> dict[str, Any]:
     query, year = movies_pipeline.parse_title_and_year(text)
     candidates = movies_pipeline.search_movie_candidates(
@@ -190,7 +191,9 @@ def _handle_movie_text(
         _publish_and_replace(conn, tg, item, chat_id, thread_id, user_msg_id)
         return {"status": "needs_input", "item_id": item["id"]}
 
-    if movies_pipeline.is_unambiguous_match(query, year, candidates, title_orig=title_orig):
+    if (auto_pick_first and candidates) or movies_pipeline.is_unambiguous_match(
+        query, year, candidates, title_orig=title_orig
+    ):
         enriched = movies_pipeline.enrich_candidate(candidates[0], tmdb=tmdb)
         existing = repo.find_existing_movie(
             conn,
@@ -260,6 +263,7 @@ def _handle_book_text(
     books_client: BooksClient | None = None,
     source_url: str | None = None,
     source_type: str = "manual",
+    auto_pick_first: bool = False,
 ) -> dict[str, Any]:
     query = text.splitlines()[0].strip()
     candidates = books_pipeline.search_book_candidates(query, books_client=books_client, limit=3)
@@ -278,7 +282,7 @@ def _handle_book_text(
         _publish_and_replace(conn, tg, item, chat_id, thread_id, user_msg_id)
         return {"status": "needs_input", "item_id": item["id"]}
 
-    if books_pipeline.is_unambiguous_book_match(query, candidates):
+    if (auto_pick_first and candidates) or books_pipeline.is_unambiguous_book_match(query, candidates):
         enriched = books_pipeline.enrich_book_candidate(candidates[0])
         existing = repo.find_existing_book(
             conn,
@@ -340,6 +344,9 @@ def _handle_message(
     tg: TelegramClient,
     tmdb: TMDBClient | None = None,
     books_client: BooksClient | None = None,
+    *,
+    override_topic_name: str | None = None,
+    auto_pick_first: bool = False,
 ) -> dict[str, Any]:
     chat_id = msg.get("chat", {}).get("id")
     user_id = msg.get("from", {}).get("id")
@@ -352,7 +359,7 @@ def _handle_message(
 
     thread_id = msg.get("message_thread_id")
     msg_id = msg.get("message_id")
-    topic_name = settings.resolve_topic_name(thread_id)
+    topic_name = override_topic_name or settings.resolve_topic_name(thread_id)
     category, url, source_type = infer_category(topic_name, text)
 
     # Этап 2: запросы в топике Movies (поддерживает и 1 фильм, и список фильмов построчно)
@@ -370,7 +377,9 @@ def _handle_message(
         lines = split_batch_lines(text) if not url else [text]
         if len(lines) > 1:
             results = [
-                _handle_movie_text(conn, line, chat_id, thread_id, None, tg, tmdb=tmdb)
+                _handle_movie_text(
+                    conn, line, chat_id, thread_id, None, tg, tmdb=tmdb, auto_pick_first=auto_pick_first
+                )
                 for line in lines
             ]
             if chat_id and msg_id and settings.telegram_bot_token:
@@ -389,6 +398,7 @@ def _handle_message(
             tmdb=tmdb,
             source_url=url,
             source_type=source_type,
+            auto_pick_first=auto_pick_first,
         )
 
     # Этап 3: запросы в топике Books (поддерживает и 1 книгу, и список книг построчно)
@@ -405,7 +415,9 @@ def _handle_message(
         lines = split_batch_lines(text)
         if len(lines) > 1:
             results = [
-                _handle_book_text(conn, line, chat_id, thread_id, None, tg, books_client=books_client)
+                _handle_book_text(
+                    conn, line, chat_id, thread_id, None, tg, books_client=books_client, auto_pick_first=auto_pick_first
+                )
                 for line in lines
             ]
             if chat_id and msg_id and settings.telegram_bot_token:
@@ -414,7 +426,16 @@ def _handle_message(
                 except Exception:
                     pass
             return {"status": "batch_created", "count": len(results), "results": results}
-        return _handle_book_text(conn, lines[0] if lines else text, chat_id, thread_id, msg_id, tg, books_client=books_client)
+        return _handle_book_text(
+            conn,
+            lines[0] if lines else text,
+            chat_id,
+            thread_id,
+            msg_id,
+            tg,
+            books_client=books_client,
+            auto_pick_first=auto_pick_first,
+        )
 
     title_line = text.splitlines()[0][:120]
     summary = text if len(text) > len(title_line) else None
@@ -502,6 +523,7 @@ def _handle_message(
                             source_url=canonical_url,
                             source_type=source_type,
                             title_orig=t_orig,
+                            auto_pick_first=auto_pick_first,
                         )
                     else:
                         r = _handle_book_text(
@@ -514,6 +536,7 @@ def _handle_message(
                             books_client=books_client,
                             source_url=canonical_url,
                             source_type=source_type,
+                            auto_pick_first=auto_pick_first,
                         )
                     results.append(r)
                 if chat_id and msg_id and settings.telegram_bot_token:
@@ -732,3 +755,60 @@ def _handle_callback(
         return {"status": "deleted", "item_id": int(raw_id)}
 
     return {"status": "unknown_callback"}
+
+
+def ingest_web_item(
+    conn: Any,
+    text: str,
+    *,
+    topic: str = "auto",
+    tmdb: TMDBClient | None = None,
+    books_client: BooksClient | None = None,
+) -> dict[str, Any]:
+    """Добавление и автообогащение записи напрямую с веб-витрины / TMA."""
+    clean = (text or "").strip()
+    if not clean:
+        return {"status": "empty_message"}
+
+    raw_topic = (topic or "auto").strip().lower()
+    topic_alias = {
+        "movies": "movies",
+        "movie": "movies",
+        "books": "books",
+        "book": "books",
+        "video": "youtube",
+        "youtube": "youtube",
+        "article": "articles",
+        "articles": "articles",
+        "ideas": "ideas",
+        "idea": "ideas",
+        "post": "ideas",
+    }
+    if raw_topic == "auto":
+        topic_name = "movies" if movies_pipeline.parse_direct_media_ids(clean) else "general"
+    else:
+        topic_name = topic_alias.get(raw_topic, "general")
+
+    thread_id = {
+        "movies": settings.topic_movies_id or None,
+        "books": settings.topic_books_id or None,
+        "ideas": settings.topic_ideas_id or None,
+        "youtube": settings.topic_youtube_id or None,
+        "articles": settings.topic_articles_id or None,
+    }.get(topic_name)
+
+    synthetic_msg = {
+        "chat": {"id": settings.tg_chat_id},
+        "from": {"id": settings.allowed_tg_user_id},
+        "text": clean,
+        "message_thread_id": thread_id,
+    }
+    return _handle_message(
+        conn,
+        synthetic_msg,
+        TelegramClient(),
+        tmdb=tmdb,
+        books_client=books_client,
+        override_topic_name=topic_name,
+        auto_pick_first=True,
+    )

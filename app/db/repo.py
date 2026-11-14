@@ -426,6 +426,31 @@ def get_item(conn: Any, item_id: int) -> dict[str, Any] | None:
         {"id": r[0], "source_url": r[1], "source_type": r[2], "raw_text": r[3], "added_at": r[4]}
         for r in src_cur.fetchall()
     ]
+
+    extracted_text: str | None = None
+    orig_clauses: list[str] = []
+    orig_params: list[Any] = []
+    if item.get("canonical_url"):
+        orig_clauses.append("source_url = ?")
+        orig_params.append(item["canonical_url"])
+    if item.get("tg_message_id") is not None:
+        orig_clauses.append("tg_message_id = ?")
+        orig_params.append(int(item["tg_message_id"]))
+    if orig_clauses:
+        ext_row = conn.execute(
+            f"""
+            SELECT extracted_text FROM original_messages
+            WHERE ({' OR '.join(orig_clauses)})
+              AND extracted_text IS NOT NULL
+              AND TRIM(extracted_text) <> ''
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            orig_params,
+        ).fetchone()
+        if ext_row:
+            extracted_text = ext_row[0]
+    item["extracted_text"] = extracted_text
     return item
 
 
@@ -476,13 +501,59 @@ def update_item_fields(
     *,
     status: str | None = None,
     user_rating: int | None = None,
+    title_ru: str | None = None,
+    summary: str | None = None,
+    user_note: str | None = None,
+    tags: list[str] | None = None,
 ) -> dict[str, Any] | None:
+    cur_item = get_item(conn, item_id)
+    if not cur_item:
+        return None
+
+    fts_dirty = False
     if status is not None:
         conn.execute("UPDATE items SET status = ? WHERE id = ?", (status, item_id))
     if user_rating is not None:
         val = None if user_rating == 0 else int(user_rating)
         conn.execute("UPDATE items SET user_rating = ? WHERE id = ?", (val, item_id))
+    if title_ru is not None:
+        clean_title = title_ru.strip() or cur_item["title_ru"]
+        norm_title = normalize_text(clean_title) or "untitled"
+        conn.execute(
+            "UPDATE items SET title_ru = ?, normalized_title = ? WHERE id = ?",
+            (clean_title, norm_title, item_id),
+        )
+        fts_dirty = True
+    if summary is not None:
+        clean_summary = summary.strip() or None
+        conn.execute("UPDATE items SET summary = ? WHERE id = ?", (clean_summary, item_id))
+        fts_dirty = True
+    if user_note is not None:
+        raw_meta = cur_item.get("meta")
+        meta_dict: dict[str, Any] = {}
+        if isinstance(raw_meta, dict):
+            meta_dict = dict(raw_meta)
+        elif isinstance(raw_meta, str) and raw_meta.strip():
+            try:
+                parsed = json.loads(raw_meta)
+                if isinstance(parsed, dict):
+                    meta_dict = parsed
+            except Exception:
+                meta_dict = {}
+        clean_note = user_note.strip()
+        if clean_note:
+            meta_dict["user_note"] = clean_note
+        else:
+            meta_dict.pop("user_note", None)
+        meta_json = json.dumps(meta_dict, ensure_ascii=False) if meta_dict else None
+        conn.execute("UPDATE items SET meta = ? WHERE id = ?", (meta_json, item_id))
+    if tags is not None:
+        set_item_tags(conn, item_id, tags=tags, commit=False)
+        fts_dirty = True
+
     conn.commit()
+    if fts_dirty:
+        sync_item_fts(conn, item_id)
     return get_item(conn, item_id)
 
 
