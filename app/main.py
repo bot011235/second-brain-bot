@@ -216,10 +216,12 @@ def api_list_items(
     q: str | None = Query(default=None),
     sort: str = Query(default="created"),
     limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     smart: str | None = Query(default=None),
     _user: dict[str, Any] = Depends(require_tma_auth),
 ) -> dict[str, Any]:
     conn = get_connection()
+    safe_offset = offset if isinstance(offset, int) else 0
     try:
         items = repo.list_items_catalog(
             conn,
@@ -229,9 +231,25 @@ def api_list_items(
             q=q,
             sort=sort,
             limit=limit,
+            offset=safe_offset,
             smart=smart,
         )
-        return {"items": items, "count": len(items), "tg_chat_id": settings.tg_chat_id}
+        status_counts: dict[str, int] | None = None
+        if safe_offset == 0 and (not status or status == "all") and not tag and not q and not smart:
+            status_counts = repo.get_status_counts_by_tab(conn, tab=tab)
+            total = status_counts["all"]
+        else:
+            total = repo.count_items_catalog(conn, tab=tab, status=status, tag=tag, q=q, smart=smart)
+        res: dict[str, Any] = {
+            "items": items,
+            "count": len(items),
+            "total": total,
+            "has_more": (safe_offset + len(items)) < total,
+            "tg_chat_id": settings.tg_chat_id,
+        }
+        if status_counts is not None:
+            res["status_counts"] = status_counts
+        return res
     finally:
         conn.close()
 

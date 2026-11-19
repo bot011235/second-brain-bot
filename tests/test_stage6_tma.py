@@ -508,11 +508,113 @@ class TestStage6TMA(unittest.TestCase):
                     q=None,
                     sort="created",
                     limit=200,
+                    offset=0,
                     smart="favorites",
                     _user={"id": 349407845},
                 )
             self.assertEqual(api_res["count"], 1)
+            self.assertEqual(api_res["total"], 1)
+            self.assertFalse(api_res["has_more"])
             self.assertEqual([x["id"] for x in api_res["items"]], [it_fav_book["id"]])
+        finally:
+            conn.close()
+
+    def test_stage5_pagination_sorts_and_status_counts(self) -> None:
+        from unittest.mock import patch
+        import app.main as main_mod
+
+        conn = get_connection(":memory:")
+        apply_migrations(conn)
+
+        class _NoCloseConn:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+            def close(self):
+                return None
+
+        it_a = repo.create_item(
+            conn,
+            category="movie",
+            title_ru="Альфа",
+            release_year=2020,
+            status="planned",
+        )
+        it_b = repo.create_item(
+            conn,
+            category="movie",
+            title_ru="Бета",
+            release_year=2025,
+            status="done",
+        )
+        it_g = repo.create_item(
+            conn,
+            category="book",
+            title_ru="Гамма",
+            release_year=2022,
+            status="inbox",
+        )
+        conn.execute(
+            "UPDATE items SET updated_at = '2026-11-20 12:00:00' WHERE id = ?",
+            (it_a["id"],),
+        )
+        conn.commit()
+
+        try:
+            # 1. Сортировки year, title, updated
+            by_year = repo.list_items_catalog(conn, sort="year")
+            self.assertEqual([x["id"] for x in by_year], [it_b["id"], it_g["id"], it_a["id"]])
+
+            by_title = repo.list_items_catalog(conn, sort="title")
+            self.assertEqual([x["id"] for x in by_title], [it_a["id"], it_b["id"], it_g["id"]])
+
+            by_updated = repo.list_items_catalog(conn, sort="updated")
+            self.assertEqual(by_updated[0]["id"], it_a["id"])
+
+            # 2. Пагинация limit/offset и реальные счётчики статусов
+            self.assertEqual(repo.count_items_catalog(conn), 3)
+            self.assertEqual(
+                repo.get_status_counts_by_tab(conn),
+                {"all": 3, "inbox": 1, "planned": 1, "in_progress": 0, "done": 1, "dropped": 0},
+            )
+
+            wrapped = _NoCloseConn(conn)
+            with patch.object(main_mod, "get_connection", return_value=wrapped):
+                page1 = main_mod.api_list_items(
+                    tab=None,
+                    status=None,
+                    tag=None,
+                    q=None,
+                    sort="title",
+                    limit=2,
+                    offset=0,
+                    smart=None,
+                    _user={"id": 349407845},
+                )
+                page2 = main_mod.api_list_items(
+                    tab=None,
+                    status=None,
+                    tag=None,
+                    q=None,
+                    sort="title",
+                    limit=2,
+                    offset=2,
+                    smart=None,
+                    _user={"id": 349407845},
+                )
+
+            self.assertEqual([x["id"] for x in page1["items"]], [it_a["id"], it_b["id"]])
+            self.assertEqual(page1["total"], 3)
+            self.assertTrue(page1["has_more"])
+            self.assertEqual(page1["status_counts"]["inbox"], 1)
+
+            self.assertEqual([x["id"] for x in page2["items"]], [it_g["id"]])
+            self.assertEqual(page2["total"], 3)
+            self.assertFalse(page2["has_more"])
+            self.assertNotIn("status_counts", page2)
         finally:
             conn.close()
 
@@ -637,10 +739,10 @@ class TestStage6TMA(unittest.TestCase):
         css = (tma_dir / "styles.css").read_text(encoding="utf-8")
         js = (tma_dir / "app.js").read_text(encoding="utf-8")
 
-        # 1. Версия ассетов v29, PWA-манифест + иконки + Service Worker, Literata
-        self.assertIn("./styles.css?v=29", html)
-        self.assertIn("./app.js?v=29", html)
-        self.assertIn("./manifest.webmanifest?v=29", html)
+        # 1. Версия ассетов v30, PWA-манифест + иконки + Service Worker, Literata
+        self.assertIn("./styles.css?v=30", html)
+        self.assertIn("./app.js?v=30", html)
+        self.assertIn("./manifest.webmanifest?v=30", html)
         self.assertEqual(mimetypes.guess_type("manifest.webmanifest")[0], "application/manifest+json")
         self.assertIn("Literata", html)
         self.assertIn('data-mode="posters"', html)
@@ -650,12 +752,13 @@ class TestStage6TMA(unittest.TestCase):
 
         for fname in ("manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
             self.assertTrue((tma_dir / fname).is_file(), f"Missing PWA asset: {fname}")
+        self.assertIn("notes-shell-v30", (tma_dir / "sw.js").read_text(encoding="utf-8"))
         self.assertTrue((tma_dir / "icon-192.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertTrue((tma_dir / "icon-512.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         manifest = json.loads((tma_dir / "manifest.webmanifest").read_text(encoding="utf-8"))
         self.assertEqual(manifest["share_target"]["params"]["url"], "share_url")
 
-        # 2. Ключевые элементы и стили Этапов 1–4 (v26–v29)
+        # 2. Ключевые элементы и стили Этапов 1–5 (v26–v30)
         for token in (
             'id="ratingPopover"',
             'id="emptyStateActions"',
@@ -672,6 +775,14 @@ class TestStage6TMA(unittest.TestCase):
             'id="bulkDeleteBtn"',
             'id="metaThemeColor"',
             'data-view="stats"',
+            'id="loadMoreBar"',
+            'id="loadMoreBtn"',
+            'id="pullRefreshIndicator"',
+            'id="globalDropOverlay"',
+            'id="liveToast"',
+            'value="updated"',
+            'value="year"',
+            'value="title"',
         ):
             self.assertIn(token, html)
 
@@ -708,6 +819,12 @@ class TestStage6TMA(unittest.TestCase):
             "stats-dashboard",
             "stats-histogram",
             "stats-diary-row",
+            "content-visibility: auto",
+            "active-poster",
+            "load-more-bar",
+            "pull-refresh-indicator",
+            "global-drop-overlay",
+            "live-toast",
         ):
             self.assertIn(token, css)
 
@@ -749,6 +866,12 @@ class TestStage6TMA(unittest.TestCase):
             "renderStats",
             "pendingShareText",
             "serviceWorker",
+            "CATALOG_PAGE_SIZE",
+            "quickIngestFromDropOrPaste",
+            "initPullToRefresh",
+            "syncTmaSafeArea",
+            "hydrateFromTgCloudStorage",
+            "findCatalogPosterEl",
         ):
             self.assertIn(token, js)
 

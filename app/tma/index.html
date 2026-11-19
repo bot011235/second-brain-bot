@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Notes</title>
-  <link rel="manifest" href="./manifest.webmanifest?v=29" />
+  <link rel="manifest" href="./manifest.webmanifest?v=30" />
   <meta name="theme-color" content="#fbf8f3" id="metaThemeColor" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,600..700;1,7..72,400&display=swap" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=29" />
+  <link rel="stylesheet" href="./styles.css?v=30" />
 </head>
 <body>
   <div class="app-shell">
@@ -125,6 +125,10 @@
 
     <!-- Основная рабочая область -->
     <div class="workspace">
+      <div id="pullRefreshIndicator" class="pull-refresh-indicator" aria-hidden="true">
+        <span class="pull-refresh-icon" id="pullRefreshIcon">↻</span>
+        <span id="pullRefreshText">Потяните для обновления</span>
+      </div>
       <header class="topbar" id="topbar">
         <!-- Компактная мобильная строка бренда -->
         <div class="mobile-brand-row">
@@ -165,10 +169,13 @@
           <div class="desktop-controls" id="desktopCatalogControls">
             <select id="sortSelect" class="control-select" title="Сортировка">
               <option value="created">По дате ↓</option>
+              <option value="updated">По обновлению ↓</option>
               <option value="imdb">IMDb / Goodreads ↓</option>
               <option value="kp">КП / FantLab ↓</option>
               <option value="rt">Rotten Tomatoes ↓</option>
               <option value="user">Моя оценка ↓</option>
+              <option value="year">Год выхода ↓</option>
+              <option value="title">По алфавиту А–Я</option>
             </select>
 
             <div class="view-mode-switch" id="viewModeSwitchDesktop" role="group" aria-label="Режим отображения">
@@ -195,10 +202,13 @@
             <span class="mobile-sort-ico" aria-hidden="true">↕</span>
             <select id="mobileSortSelect" class="mobile-sort-select" title="Сортировка" aria-label="Сортировка">
               <option value="created">По дате ↓</option>
+              <option value="updated">По обновлению ↓</option>
               <option value="imdb">IMDb / Goodreads ↓</option>
               <option value="kp">КП / FantLab ↓</option>
               <option value="rt">Rotten Tomatoes ↓</option>
               <option value="user">Моя оценка ↓</option>
+              <option value="year">Год выхода ↓</option>
+              <option value="title">По алфавиту А–Я</option>
             </select>
           </div>
         </div>
@@ -221,6 +231,9 @@
         <div id="activeSmartBanner" class="active-smart-banner hidden"></div>
         <div class="status-pills-bar" id="statusPillsBar" aria-label="Быстрый фильтр по статусам"></div>
         <div id="catalogGrid" class="catalog-list view-list"></div>
+        <div id="loadMoreBar" class="load-more-bar hidden">
+          <button type="button" id="loadMoreBtn" class="confirm-cancel-btn load-more-btn">Загрузить ещё</button>
+        </div>
         <div id="emptyState" class="empty-state hidden">
           <div class="empty-emoji" id="emptyStateEmoji">📖</div>
           <h3 id="emptyStateTitle">Записей не найдено</h3>
@@ -383,6 +396,7 @@
           <div class="shortcut-row"><span>Поиск</span><kbd class="kbd-hint">/</kbd></div>
           <div class="shortcut-row"><span>Глобальный Cmd+K</span><kbd class="kbd-hint">⌘K</kbd></div>
           <div class="shortcut-row"><span>Добавить запись</span><kbd class="kbd-hint">N</kbd></div>
+          <div class="shortcut-row"><span>Быстро вставить ссылку/заметку</span><kbd class="kbd-hint">⌘V</kbd></div>
           <div class="shortcut-row"><span>Разобрать входящие</span><kbd class="kbd-hint">T</kbd></div>
           <div class="shortcut-row"><span>Мне повезёт</span><kbd class="kbd-hint">L</kbd></div>
           <div class="shortcut-row"><span>Навигация вверх / вниз</span><kbd class="kbd-hint">J / K</kbd></div>
@@ -408,6 +422,21 @@
   <div id="posterLightbox" class="lightbox-overlay hidden" aria-hidden="true">
     <button type="button" class="lightbox-close" id="lightboxCloseBtn" aria-label="Закрыть">✕</button>
     <img id="lightboxImg" class="lightbox-img" src="" alt="" />
+  </div>
+
+  <!-- Глобальный оверлей перетаскивания ссылок и заметок -->
+  <div id="globalDropOverlay" class="global-drop-overlay hidden" aria-hidden="true">
+    <div class="global-drop-card">
+      <div class="global-drop-emoji">📥</div>
+      <div class="global-drop-title">Отпустите, чтобы сохранить в Notes</div>
+      <div class="global-drop-sub">Ссылки, фильмы, книги или заметки будут добавлены и обогащены автоматически</div>
+    </div>
+  </div>
+
+  <!-- Живой тост статуса быстрого сохранения -->
+  <div id="liveToast" class="live-toast hidden" role="status" aria-live="polite">
+    <span id="liveToastText">Сохранение...</span>
+    <button type="button" id="liveToastActionBtn" class="undo-toast-btn hidden">Открыть</button>
   </div>
 
   <!-- Плавающая панель массовых действий (Bulk Actions) -->
@@ -437,6 +466,6 @@
     <button type="button" id="undoToastBtn" class="undo-toast-btn">Отменить</button>
   </div>
 
-  <script src="./app.js?v=29"></script>
+  <script src="./app.js?v=30"></script>
 </body>
 </html>

@@ -581,18 +581,15 @@ def _build_fts_prefix_query(raw_q: str) -> str:
     return " AND ".join(f'"{t}"*' for t in tokens[:6])
 
 
-def list_items_catalog(
-    conn: Any,
+def _build_catalog_where(
     *,
     tab: str | None = None,
     status: str | None = None,
     tag: str | None = None,
     q: str | None = None,
-    sort: str = "created",
-    limit: int = 200,
     smart: str | None = None,
-) -> list[dict[str, Any]]:
-    """Выборка элементов для витрины Telegram Mini App с фильтрацией, поиском и сортировкой."""
+) -> tuple[str, list[Any]]:
+    """Строит SQL WHERE и параметры для каталога, подсчёта total и счётчиков статусов."""
     where_clauses: list[str] = []
     params: list[Any] = []
 
@@ -660,18 +657,73 @@ def list_items_catalog(
         params.extend(q_params)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    return where_sql, params
+
+
+def count_items_catalog(
+    conn: Any,
+    *,
+    tab: str | None = None,
+    status: str | None = None,
+    tag: str | None = None,
+    q: str | None = None,
+    smart: str | None = None,
+) -> int:
+    """Возвращает общее количество записей под заданными фильтрами без учёта пагинации."""
+    where_sql, params = _build_catalog_where(tab=tab, status=status, tag=tag, q=q, smart=smart)
+    row = conn.execute(f"SELECT COUNT(*) FROM items i {where_sql}", params).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def get_status_counts_by_tab(conn: Any, *, tab: str | None = None) -> dict[str, int]:
+    """Возвращает реальные счётчики статусов по всей категории (независимо от LIMIT/OFFSET)."""
+    where_sql, params = _build_catalog_where(tab=tab)
+    rows = conn.execute(
+        f"SELECT COALESCE(i.status, 'inbox'), COUNT(*) FROM items i {where_sql} GROUP BY COALESCE(i.status, 'inbox')",
+        params,
+    ).fetchall()
+    counts = {"all": 0, "inbox": 0, "planned": 0, "in_progress": 0, "done": 0, "dropped": 0}
+    for st_val, cnt in rows:
+        cnt_int = int(cnt or 0)
+        counts["all"] += cnt_int
+        key = str(st_val) if str(st_val) in counts else "inbox"
+        counts[key] += cnt_int
+    return counts
+
+
+def list_items_catalog(
+    conn: Any,
+    *,
+    tab: str | None = None,
+    status: str | None = None,
+    tag: str | None = None,
+    q: str | None = None,
+    sort: str = "created",
+    limit: int = 200,
+    offset: int = 0,
+    smart: str | None = None,
+) -> list[dict[str, Any]]:
+    """Выборка элементов для витрины Telegram Mini App с фильтрацией, поиском, сортировкой и пагинацией."""
+    where_sql, params = _build_catalog_where(tab=tab, status=status, tag=tag, q=q, smart=smart)
 
     sort_map = {
         "created": "i.created_at DESC, i.id DESC",
+        "updated": "COALESCE(i.updated_at, i.created_at) DESC, i.id DESC",
         "imdb": "COALESCE(i.rating_imdb, -1) DESC, i.id DESC",
         "kp": "COALESCE(i.rating_kp, -1) DESC, i.id DESC",
         "rt": "COALESCE(i.rating_rt, -1) DESC, i.id DESC",
         "user": "COALESCE(i.user_rating, -1) DESC, i.id DESC",
+        "year": "COALESCE(i.release_year, -1) DESC, i.id DESC",
+        "title": "i.normalized_title ASC, i.id DESC",
     }
     order_sql = sort_map.get(sort, sort_map["created"])
+    safe_offset = max(0, int(offset))
 
     cols = ", ".join(f"i.{c}" for c in ITEM_COLUMNS)
-    cur = conn.execute(f"SELECT {cols} FROM items i {where_sql} ORDER BY {order_sql} LIMIT ?", (*params, limit))
+    cur = conn.execute(
+        f"SELECT {cols} FROM items i {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
+        (*params, limit, safe_offset),
+    )
     items: list[dict[str, Any]] = []
     by_id: dict[int, dict[str, Any]] = {}
     for row in cur.fetchall():

@@ -39,9 +39,108 @@
     return localStorage.getItem("sb_access_key") || "";
   }
 
+  const CATALOG_PAGE_SIZE = 100;
   const isTgWebApp = Boolean(tg && tg.initData);
+  let tmaHomeScreenCanAdd = false;
+
+  function syncTmaSafeArea() {
+    if (!tg) return;
+    try {
+      const rootStyle = document.documentElement.style;
+      const saTop = Number((tg.safeAreaInset && tg.safeAreaInset.top) || 0);
+      const csaTop = Number((tg.contentSafeAreaInset && tg.contentSafeAreaInset.top) || 0);
+      rootStyle.setProperty("--tg-safe-area-inset-top", `${Math.max(0, saTop)}px`);
+      rootStyle.setProperty("--tg-content-safe-area-inset-top", `${Math.max(0, csaTop)}px`);
+      document.documentElement.classList.toggle("is-tma-fullscreen", Boolean(tg.isFullscreen));
+    } catch {}
+  }
+
+  function saveCloudPref(key, value) {
+    if (!isTgWebApp || !tg || !tg.CloudStorage || typeof tg.CloudStorage.setItem !== "function") return;
+    try {
+      tg.CloudStorage.setItem(key, String(value), () => {});
+    } catch {}
+  }
+
+  function hydrateFromTgCloudStorage() {
+    if (!isTgWebApp || !tg || !tg.CloudStorage || typeof tg.CloudStorage.getItems !== "function") return;
+    try {
+      tg.CloudStorage.getItems(["sb_theme_mode", "sb_view_modes_by_tab_v1"], (err, values) => {
+        if (err || !values) return;
+        let changedViewMode = false;
+        let changedTheme = false;
+        if (values.sb_theme_mode && ["auto", "light", "dark"].includes(values.sb_theme_mode)) {
+          if (values.sb_theme_mode !== state.themeMode) {
+            state.themeMode = values.sb_theme_mode;
+            localStorage.setItem("sb_theme_mode", state.themeMode);
+            changedTheme = true;
+          }
+        }
+        if (values.sb_view_modes_by_tab_v1) {
+          try {
+            const parsed = JSON.parse(values.sb_view_modes_by_tab_v1);
+            if (parsed && typeof parsed === "object") {
+              viewModesByTab = { ...viewModesByTab, ...parsed };
+              localStorage.setItem("sb_view_modes_by_tab_v1", JSON.stringify(viewModesByTab));
+              const nextMode = getViewModeForTab(state.tab);
+              if (nextMode !== state.viewMode && state.view === "catalog") {
+                state.viewMode = nextMode;
+                changedViewMode = true;
+              }
+            }
+          } catch {}
+        }
+        if (changedTheme) applyTheme();
+        if (changedViewMode) {
+          syncNavigationState();
+          if (state.items.length > 0) renderCatalog({ skipDrawer: true });
+        }
+      });
+    } catch {}
+  }
+
+  function toggleTmaFullscreen() {
+    if (!tg) return;
+    try {
+      if (tg.isFullscreen && typeof tg.exitFullscreen === "function") {
+        tg.exitFullscreen();
+      } else if (typeof tg.requestFullscreen === "function") {
+        tg.requestFullscreen();
+      }
+    } catch {}
+  }
+
+  function triggerTmaHomeScreen() {
+    if (!tg || typeof tg.addToHomeScreen !== "function") return;
+    try {
+      tg.addToHomeScreen();
+      tmaHomeScreenCanAdd = false;
+    } catch {}
+  }
+
   if (isTgWebApp) {
     document.documentElement.classList.add("is-tma");
+    syncTmaSafeArea();
+    if (tg && typeof tg.onEvent === "function") {
+      try {
+        tg.onEvent("fullscreenChanged", syncTmaSafeArea);
+        tg.onEvent("safeAreaChanged", syncTmaSafeArea);
+        tg.onEvent("contentSafeAreaChanged", syncTmaSafeArea);
+      } catch {}
+    }
+    if (tg && typeof tg.addToHomeScreen === "function") {
+      if (typeof tg.checkHomeScreenStatus === "function") {
+        try {
+          tg.checkHomeScreenStatus((status) => {
+            tmaHomeScreenCanAdd = status !== "added" && status !== "unsupported";
+          });
+        } catch {
+          tmaHomeScreenCanAdd = true;
+        }
+      } else {
+        tmaHomeScreenCanAdd = true;
+      }
+    }
   }
 
   let deferredInstallPrompt = null;
@@ -150,8 +249,10 @@
     const k = tabKey || "";
     viewModesByTab[k] = mode;
     try {
-      localStorage.setItem("sb_view_modes_by_tab_v1", JSON.stringify(viewModesByTab));
+      const encoded = JSON.stringify(viewModesByTab);
+      localStorage.setItem("sb_view_modes_by_tab_v1", encoded);
       if (k === "") localStorage.setItem("sb_view_mode", mode);
+      saveCloudPref("sb_view_modes_by_tab_v1", encoded);
     } catch {}
   }
 
@@ -193,6 +294,9 @@
     q: "",
     sort: "created",
     items: [],
+    itemsTotal: 0,
+    hasMoreItems: false,
+    loadingMoreItems: false,
     originals: [],
     allTags: [],
     tgChatId: 0,
@@ -282,7 +386,9 @@
         : [];
       state.q = (p.get("q") || "").trim();
       const sortP = p.get("sort") || "created";
-      state.sort = ["created", "imdb", "kp", "rt", "user"].includes(sortP) ? sortP : "created";
+      state.sort = ["created", "updated", "imdb", "kp", "rt", "user", "year", "title"].includes(sortP)
+        ? sortP
+        : "created";
       const modeP = p.get("mode") || "";
       state.viewMode = VALID_VIEW_MODES.includes(modeP) ? modeP : getViewModeForTab(state.tab);
 
@@ -414,6 +520,7 @@
     if (!["auto", "light", "dark"].includes(mode)) return;
     state.themeMode = mode;
     localStorage.setItem("sb_theme_mode", state.themeMode);
+    saveCloudPref("sb_theme_mode", state.themeMode);
     applyTheme();
     if (state.filtersSheetOpen) {
       renderFiltersSheet();
@@ -429,6 +536,7 @@
       state.themeMode = resolveEffectiveTheme() === "dark" ? "light" : "dark";
     }
     localStorage.setItem("sb_theme_mode", state.themeMode);
+    saveCloudPref("sb_theme_mode", state.themeMode);
     applyTheme();
     if (state.filtersSheetOpen) {
       renderFiltersSheet();
@@ -1652,8 +1760,38 @@
     } catch {}
   }
 
+  function canRunHeroTransition() {
+    return (
+      typeof document.startViewTransition === "function" &&
+      !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+    );
+  }
+
+  function findCatalogPosterEl(itemId) {
+    const grid = document.getElementById("catalogGrid");
+    if (!grid || state.view !== "catalog") return null;
+    const card = grid.querySelector(`[data-open-id="${Number(itemId)}"]`);
+    if (!card) return null;
+    const el = card.querySelector(
+      ".poster-cover, .poster-box, .list-poster, .card-video-thumb, .kanban-poster, .list-type-badge"
+    );
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0 || r.bottom <= 0 || r.top >= window.innerHeight) {
+      return null;
+    }
+    return el;
+  }
+
   function openDetailDrawer(itemId, opts = {}) {
-    const { keepTriage = false, keepLucky = false, fallbackItem = null, skipUrlSync = false, replaceUrl = false } = opts;
+    const {
+      keepTriage = false,
+      keepLucky = false,
+      fallbackItem = null,
+      skipUrlSync = false,
+      replaceUrl = false,
+      skipTransition = false,
+    } = opts;
     const numId = Number(itemId);
     const wasClosed = state.drawerItemId === null;
     closeStatusPopover();
@@ -1672,11 +1810,36 @@
     if (fallbackItem && !state.items.some((i) => Number(i.id) === numId)) {
       state.externalDrawerItem = fallbackItem;
     }
+    const sourcePoster = wasClosed && !skipTransition ? findCatalogPosterEl(numId) : null;
     state.drawerItemId = numId;
     state.drawerConfirmDelete = false;
     state.drawerEditMode = false;
     state.drawerAddTagMode = false;
-    renderDetailDrawer();
+
+    if (sourcePoster && canRunHeroTransition()) {
+      try {
+        sourcePoster.style.viewTransitionName = "active-poster";
+        const vt = document.startViewTransition(() => {
+          sourcePoster.style.viewTransitionName = "";
+          renderDetailDrawer();
+          const dp = drawerBody ? drawerBody.querySelector(".drawer-poster") : null;
+          if (dp) dp.style.viewTransitionName = "active-poster";
+        });
+        if (vt && vt.finished) {
+          vt.finished.finally(() => {
+            sourcePoster.style.viewTransitionName = "";
+            const dp = drawerBody ? drawerBody.querySelector(".drawer-poster") : null;
+            if (dp) dp.style.viewTransitionName = "";
+          });
+        }
+      } catch {
+        sourcePoster.style.viewTransitionName = "";
+        renderDetailDrawer();
+      }
+    } else {
+      renderDetailDrawer();
+    }
+
     hydrateDrawerFullText(numId);
     if (!skipUrlSync) {
       syncStateToUrl({ push: wasClosed && !replaceUrl });
@@ -1705,6 +1868,10 @@
   function closeDetailDrawer(opts = {}) {
     if (state.drawerItemId === null && !state.triageCompletedView) return;
     flushPendingNoteSave();
+    const closingId = state.drawerItemId;
+    const drawerPoster = !opts.skipTransition && drawerBody ? drawerBody.querySelector(".drawer-poster") : null;
+    const targetPoster = !opts.skipTransition && closingId !== null ? findCatalogPosterEl(closingId) : null;
+
     state.drawerItemId = null;
     state.externalDrawerItem = null;
     state.drawerConfirmDelete = false;
@@ -1713,7 +1880,28 @@
     state.triageMode = false;
     state.triageCompletedView = false;
     state.luckyMode = false;
-    renderDetailDrawer();
+
+    if (drawerPoster && targetPoster && canRunHeroTransition()) {
+      try {
+        drawerPoster.style.viewTransitionName = "active-poster";
+        const vt = document.startViewTransition(() => {
+          renderDetailDrawer();
+          targetPoster.style.viewTransitionName = "active-poster";
+        });
+        if (vt && vt.finished) {
+          vt.finished.finally(() => {
+            targetPoster.style.viewTransitionName = "";
+          });
+        }
+      } catch {
+        drawerPoster.style.viewTransitionName = "";
+        targetPoster.style.viewTransitionName = "";
+        renderDetailDrawer();
+      }
+    } else {
+      renderDetailDrawer();
+    }
+
     if (!opts.skipUrlSync) {
       syncStateToUrl({ push: false });
     }
@@ -2020,10 +2208,13 @@
     });
     const sortOpts = [
       { v: "created", l: "По дате ↓" },
+      { v: "updated", l: "По обновлению ↓" },
       { v: "imdb", l: "IMDb / Goodreads ↓" },
       { v: "kp", l: "КП / FantLab ↓" },
       { v: "rt", l: "Rotten Tomatoes ↓" },
       { v: "user", l: "Моя оценка ↓" },
+      { v: "year", l: "Год выхода ↓" },
+      { v: "title", l: "По алфавиту А–Я" },
     ];
     const modeOpts = [
       { v: "list", l: "☰ Список" },
@@ -2149,6 +2340,20 @@
             Сбросить фильтры
           </button>
           ${
+            isTgWebApp && tg && typeof tg.requestFullscreen === "function"
+              ? `<button type="button" class="confirm-cancel-btn" id="sheetTmaFullscreenBtn" style="width:100%;padding:10px;">
+                  ${tg.isFullscreen ? "🗗 Выйти из полного экрана" : "⛶ На весь экран (Telegram)"}
+                </button>`
+              : ""
+          }
+          ${
+            isTgWebApp && tmaHomeScreenCanAdd
+              ? `<button type="button" class="confirm-cancel-btn" id="sheetTmaHomeScreenBtn" style="width:100%;padding:10px;">
+                  📲 Ярлык на главный экран
+                </button>`
+              : ""
+          }
+          ${
             deferredInstallPrompt
               ? `<button type="button" class="auth-submit-btn" id="sheetInstallPwaBtn" style="width:100%;padding:10px;">
                   📲 Установить приложение (PWA)
@@ -2188,6 +2393,18 @@
   });
 
   filtersSheetBody.addEventListener("click", async (e) => {
+    if (e.target.closest("#sheetTmaFullscreenBtn")) {
+      toggleTmaFullscreen();
+      closeFiltersSheet();
+      return;
+    }
+
+    if (e.target.closest("#sheetTmaHomeScreenBtn")) {
+      triggerTmaHomeScreen();
+      closeFiltersSheet();
+      return;
+    }
+
     if (e.target.closest("#sheetInstallPwaBtn")) {
       if (deferredInstallPrompt) {
         const promptEvt = deferredInstallPrompt;
@@ -3038,6 +3255,24 @@
     }
   }
 
+  function renderLoadMoreBar() {
+    const bar = document.getElementById("loadMoreBar");
+    const btn = document.getElementById("loadMoreBtn");
+    if (!bar || !btn) return;
+    if (state.view !== "catalog" || !state.hasMoreItems || !state.items.length) {
+      bar.classList.add("hidden");
+      return;
+    }
+    bar.classList.remove("hidden");
+    const remaining = Math.max(0, Number(state.itemsTotal || 0) - state.items.length);
+    btn.disabled = Boolean(state.loadingMoreItems);
+    btn.textContent = state.loadingMoreItems
+      ? "Загрузка..."
+      : remaining > 0
+      ? `Загрузить ещё (осталось ${remaining})`
+      : "Загрузить ещё";
+  }
+
   function renderCatalog(opts = {}) {
     const { skipDrawer = false } = opts;
     openSwipeWrap = null;
@@ -3051,7 +3286,13 @@
     const grid = document.getElementById("catalogGrid");
     const empty = document.getElementById("emptyState");
 
-    updateCountLabels(`Найдено записей: ${state.items.length}`, state.items.length);
+    const shownCount = state.items.length;
+    const totalCount = Math.max(shownCount, Number(state.itemsTotal || shownCount));
+    const countLabel =
+      state.hasMoreItems && totalCount > shownCount
+        ? `Показано ${shownCount} из ${totalCount}`
+        : `Найдено записей: ${totalCount}`;
+    updateCountLabels(countLabel, totalCount);
     renderActiveSmartBanner();
     renderStatusPillsBar();
 
@@ -3059,6 +3300,7 @@
       if (container) container.classList.remove("kanban-wide");
       grid.className = "catalog-list";
       grid.innerHTML = "";
+      renderLoadMoreBar();
       renderBulkActionBar();
       renderEmptyState();
       return;
@@ -3088,6 +3330,7 @@
     if (state.selectedIds.size > 0) {
       grid.classList.add("bulk-selecting");
     }
+    renderLoadMoreBar();
     renderBulkActionBar();
 
     applyMobileSingleLineTags();
@@ -3102,6 +3345,7 @@
     const grid = document.getElementById("catalogGrid");
     const empty = document.getElementById("emptyState");
     if (container) container.classList.remove("kanban-wide");
+    renderLoadMoreBar();
     renderActiveSmartBanner();
     renderStatusPillsBar();
     renderBulkActionBar();
@@ -3271,6 +3515,7 @@
     if (!grid) return;
     if (container) container.classList.remove("kanban-wide");
     if (empty) empty.classList.add("hidden");
+    renderLoadMoreBar();
     renderActiveSmartBanner();
     renderStatusPillsBar();
     renderBulkActionBar();
@@ -3610,14 +3855,21 @@
     }
   }
 
-  async function loadItems() {
-    if (itemsAbort) itemsAbort.abort();
-    itemsAbort = new AbortController();
-    const { signal } = itemsAbort;
-
-    if (state.items.length === 0) {
-      renderSkeletonRows();
+  async function loadItems({ append = false } = {}) {
+    if (append) {
+      if (!state.hasMoreItems || state.loadingMoreItems) return;
+      state.loadingMoreItems = true;
+      renderLoadMoreBar();
+    } else {
+      state.loadingMoreItems = false;
+      if (itemsAbort) itemsAbort.abort();
+      itemsAbort = new AbortController();
+      if (state.items.length === 0) {
+        renderSkeletonRows();
+      }
     }
+    const controller = append ? new AbortController() : itemsAbort;
+    const { signal } = controller;
 
     const params = new URLSearchParams();
     if (state.tab) params.set("tab", state.tab);
@@ -3626,6 +3878,8 @@
     if (state.tags.length) params.set("tag", state.tags.join(","));
     if (state.q) params.set("q", state.q);
     if (state.sort) params.set("sort", state.sort);
+    params.set("limit", String(CATALOG_PAGE_SIZE));
+    params.set("offset", append ? String(state.items.length) : "0");
 
     try {
       const res = await fetch(`/api/items?${params.toString()}`, { headers: authHeaders(), signal });
@@ -3640,18 +3894,38 @@
       hideAuthModal();
       const data = await res.json();
       if (signal.aborted) return;
-      state.items = data.items || [];
-      state.tgChatId = data.tg_chat_id || 0;
-      if (state.status === "all" && !state.tags.length && !state.q && !state.smart) {
-        state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
+
+      const batch = data.items || [];
+      if (append) {
+        const seen = new Set(state.items.map((i) => Number(i.id)));
+        const fresh = batch.filter((i) => !seen.has(Number(i.id)));
+        state.items = [...state.items, ...fresh];
+        state.itemsTotal = Number(data.total != null ? data.total : state.items.length);
+        state.hasMoreItems = Boolean(data.has_more) && fresh.length > 0;
+        renderCatalog({ skipDrawer: true });
+      } else {
+        state.items = batch;
+        state.tgChatId = data.tg_chat_id || 0;
+        state.itemsTotal = Number(data.total != null ? data.total : state.items.length);
+        state.hasMoreItems = Boolean(data.has_more);
+        if (data.status_counts) {
+          state.statusCountsByTab[state.tab || ""] = data.status_counts;
+        } else if (state.status === "all" && !state.tags.length && !state.q && !state.smart) {
+          state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
+        }
+        if (isDefaultCatalogQuery()) {
+          saveItemsCache();
+        }
+        renderCatalog();
       }
-      if (isDefaultCatalogQuery()) {
-        saveItemsCache();
-      }
-      renderCatalog();
     } catch (err) {
       if (err && err.name === "AbortError") return;
       throw err;
+    } finally {
+      if (append) {
+        state.loadingMoreItems = false;
+        renderLoadMoreBar();
+      }
     }
   }
 
@@ -3660,7 +3934,7 @@
     if (tb) tb.classList.remove("topbar-hidden");
   }
 
-  function refreshCurrentView() {
+  async function refreshCurrentView() {
     closeStatusPopover();
     closeRatingPopover();
     closeOpenSwipeRow();
@@ -3670,13 +3944,12 @@
     }
     syncNavigationState();
     if (state.view === "originals") {
-      loadOriginals();
+      await loadOriginals();
     } else if (state.view === "stats") {
-      loadStats();
+      await loadStats();
     } else {
       tryHydrateFromCache();
-      loadTags();
-      loadItems();
+      await Promise.all([loadTags(), loadItems()]);
     }
   }
 
@@ -4460,6 +4733,28 @@
             },
           ]
         : []),
+      ...(isTgWebApp && tg && typeof tg.requestFullscreen === "function"
+        ? [
+            {
+              id: "act-tma-fullscreen",
+              group: "Настройки",
+              label: tg.isFullscreen ? "🗗 Выйти из полного экрана" : "⛶ На весь экран (Telegram)",
+              sub: "",
+              run: () => toggleTmaFullscreen(),
+            },
+          ]
+        : []),
+      ...(isTgWebApp && tmaHomeScreenCanAdd
+        ? [
+            {
+              id: "act-tma-homescreen",
+              group: "Настройки",
+              label: "📲 Ярлык на главный экран",
+              sub: "",
+              run: () => triggerTmaHomeScreen(),
+            },
+          ]
+        : []),
       {
         id: "act-cat-all",
         group: "Категории",
@@ -4722,7 +5017,7 @@
     sheetEl.addEventListener("touchcancel", finish, { passive: true });
   }
 
-  bindSheetSwipeToClose(drawerEl, closeDetailDrawer, { scrollEl: () => drawerBody });
+  bindSheetSwipeToClose(drawerEl, () => closeDetailDrawer({ skipTransition: true }), { scrollEl: () => drawerBody });
   bindSheetSwipeToClose(document.getElementById("filtersSheet"), closeFiltersSheet, {
     scrollEl: () => filtersSheetBody,
   });
@@ -5584,6 +5879,304 @@
     }
   });
 
+  const loadMoreBarEl = document.getElementById("loadMoreBar");
+  const loadMoreBtnEl = document.getElementById("loadMoreBtn");
+  if (loadMoreBtnEl) {
+    loadMoreBtnEl.addEventListener("click", () => loadItems({ append: true }));
+  }
+  if (loadMoreBarEl && typeof IntersectionObserver === "function") {
+    const loadMoreObserver = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((en) => en.isIntersecting) && state.view === "catalog" && state.hasMoreItems && !state.loadingMoreItems) {
+          loadItems({ append: true });
+        }
+      },
+      { rootMargin: "260px" }
+    );
+    loadMoreObserver.observe(loadMoreBarEl);
+  }
+
+  const liveToastEl = document.getElementById("liveToast");
+  const liveToastTextEl = document.getElementById("liveToastText");
+  const liveToastActionBtnEl = document.getElementById("liveToastActionBtn");
+  let liveToastTimer = null;
+  let liveToastActionFn = null;
+
+  function hideLiveToast() {
+    clearTimeout(liveToastTimer);
+    liveToastTimer = null;
+    liveToastActionFn = null;
+    if (liveToastEl) liveToastEl.classList.add("hidden");
+    if (liveToastActionBtnEl) liveToastActionBtnEl.classList.add("hidden");
+  }
+
+  function showLiveToast(text, opts = {}) {
+    const { actionLabel = "", onAction = null, durationMs = 4200 } = opts;
+    clearTimeout(liveToastTimer);
+    liveToastTimer = null;
+    if (!liveToastEl || !liveToastTextEl) return;
+    liveToastTextEl.textContent = text;
+    liveToastActionFn = typeof onAction === "function" ? onAction : null;
+    if (liveToastActionBtnEl) {
+      if (actionLabel && liveToastActionFn) {
+        liveToastActionBtnEl.textContent = actionLabel;
+        liveToastActionBtnEl.classList.remove("hidden");
+      } else {
+        liveToastActionBtnEl.classList.add("hidden");
+      }
+    }
+    liveToastEl.classList.remove("hidden");
+    if (durationMs > 0) {
+      liveToastTimer = setTimeout(hideLiveToast, durationMs);
+    }
+  }
+
+  if (liveToastActionBtnEl) {
+    liveToastActionBtnEl.addEventListener("click", () => {
+      const fn = liveToastActionFn;
+      hideLiveToast();
+      if (fn) fn();
+    });
+  }
+
+  async function quickIngestFromDropOrPaste(rawText) {
+    const trimmed = String(rawText || "").trim();
+    if (!trimmed) return;
+    const preview = trimmed.length > 40 ? `${trimmed.slice(0, 40)}…` : trimmed;
+    showLiveToast(`✨ Сохраняю: «${preview}»`, { durationMs: 0 });
+
+    const tabMap = { movies: "movies", books: "books", video: "video", article: "article", ideas: "ideas" };
+    const topic = tabMap[state.tab] || "auto";
+
+    try {
+      const res = await fetch("/api/items", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ text: trimmed, topic }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        hideLiveToast();
+        showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showLiveToast(data.detail || "Не удалось сохранить запись.", { durationMs: 4200 });
+        return;
+      }
+
+      clearCatalogCache();
+      const savedItem = data.item || null;
+      const savedTitle = (savedItem && savedItem.title_ru) || preview;
+      const label = data.status === "duplicate" ? `ℹ️ Уже в базе: «${savedTitle}»` : `✅ Добавлено: «${savedTitle}»`;
+      haptic("medium");
+      if (state.view === "catalog") {
+        refreshCurrentView();
+      }
+      showLiveToast(label, {
+        actionLabel: savedItem && savedItem.id ? "Открыть" : "",
+        onAction: savedItem && savedItem.id ? () => openItemById(savedItem.id, { fallbackItem: savedItem }) : null,
+        durationMs: 4500,
+      });
+    } catch {
+      showLiveToast("Ошибка сети при сохранении.", { durationMs: 4200 });
+    }
+  }
+
+  document.addEventListener("paste", (e) => {
+    if (authModal && !authModal.classList.contains("hidden")) return;
+    if (
+      state.quickAddOpen ||
+      state.cmdPaletteOpen ||
+      state.shortcutsOpen ||
+      state.filtersSheetOpen ||
+      state.drawerItemId !== null
+    ) {
+      return;
+    }
+    const activeEl = document.activeElement;
+    const activeTag = (activeEl && activeEl.tagName ? activeEl.tagName : "").toLowerCase();
+    const isTyping =
+      activeTag === "input" ||
+      activeTag === "textarea" ||
+      activeTag === "select" ||
+      Boolean(activeEl && activeEl.isContentEditable);
+    if (isTyping) return;
+
+    const rawText =
+      e.clipboardData && typeof e.clipboardData.getData === "function"
+        ? (e.clipboardData.getData("text/plain") || "").trim()
+        : "";
+    if (!rawText) return;
+    e.preventDefault();
+    quickIngestFromDropOrPaste(rawText);
+  });
+
+  const globalDropOverlayEl = document.getElementById("globalDropOverlay");
+  let globalDragDepth = 0;
+
+  function isExternalTextDrag(e) {
+    if (draggedKanbanId !== null) return false;
+    if (authModal && !authModal.classList.contains("hidden")) return false;
+    const dt = e.dataTransfer;
+    if (!dt || !dt.types) return false;
+    const types = Array.from(dt.types);
+    return types.includes("text/uri-list") || types.includes("text/plain");
+  }
+
+  function hideGlobalDropOverlay() {
+    globalDragDepth = 0;
+    if (globalDropOverlayEl) {
+      globalDropOverlayEl.classList.add("hidden");
+      globalDropOverlayEl.setAttribute("aria-hidden", "true");
+    }
+  }
+
+  window.addEventListener("dragenter", (e) => {
+    if (!isExternalTextDrag(e)) return;
+    e.preventDefault();
+    globalDragDepth += 1;
+    if (globalDropOverlayEl) {
+      globalDropOverlayEl.classList.remove("hidden");
+      globalDropOverlayEl.setAttribute("aria-hidden", "false");
+    }
+  });
+
+  window.addEventListener("dragover", (e) => {
+    if (!isExternalTextDrag(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  });
+
+  window.addEventListener("dragleave", () => {
+    if (globalDragDepth <= 0) return;
+    globalDragDepth -= 1;
+    if (globalDragDepth === 0) hideGlobalDropOverlay();
+  });
+
+  window.addEventListener("drop", (e) => {
+    const active = globalDragDepth > 0 || isExternalTextDrag(e);
+    if (!active) return;
+    e.preventDefault();
+    hideGlobalDropOverlay();
+    const dt = e.dataTransfer;
+    const raw = dt ? (dt.getData("text/uri-list") || dt.getData("text/plain") || "").trim() : "";
+    if (raw) {
+      quickIngestFromDropOrPaste(raw);
+    }
+  });
+
+  window.addEventListener("blur", hideGlobalDropOverlay);
+
+  (function initPullToRefresh() {
+    const indicatorEl = document.getElementById("pullRefreshIndicator");
+    const textEl = document.getElementById("pullRefreshText");
+    if (!indicatorEl || !textEl) return;
+
+    const TRIGGER_PX = 56;
+    let startX = 0;
+    let startY = 0;
+    let pulling = false;
+    let armed = false;
+    let ptrRefreshing = false;
+    let pullDist = 0;
+
+    function resetIndicator() {
+      pulling = false;
+      armed = false;
+      pullDist = 0;
+      indicatorEl.classList.remove("pulling");
+      if (!ptrRefreshing) {
+        indicatorEl.style.height = "0px";
+        textEl.textContent = "Потяните для обновления";
+      }
+    }
+
+    document.addEventListener(
+      "touchstart",
+      (e) => {
+        if (window.innerWidth > 820 || ptrRefreshing || e.touches.length !== 1) return;
+        if ((window.scrollY || 0) > 2 || openSwipeWrap) return;
+        const anyOverlay =
+          state.drawerItemId !== null ||
+          state.filtersSheetOpen ||
+          state.quickAddOpen ||
+          state.cmdPaletteOpen ||
+          state.shortcutsOpen ||
+          (authModal && !authModal.classList.contains("hidden"));
+        if (anyOverlay) return;
+        if (e.target.closest("#statusPillsBar, #tagBar, #mobileCategoryTabs, input, textarea, select")) return;
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        pullDist = 0;
+        pulling = true;
+        armed = false;
+      },
+      { passive: true }
+    );
+
+    document.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!pulling || ptrRefreshing || e.touches.length !== 1) return;
+        const dx = e.touches[0].clientX - startX;
+        const dy = e.touches[0].clientY - startY;
+        if (dy <= 0 || Math.abs(dx) > Math.abs(dy)) {
+          if (pullDist === 0 && dy < -8) pulling = false;
+          return;
+        }
+        if ((window.scrollY || 0) > 2) {
+          resetIndicator();
+          return;
+        }
+        if (dy < 14) return;
+        pullDist = Math.min(84, Math.round((dy - 14) * 0.55));
+        indicatorEl.classList.add("pulling");
+        indicatorEl.style.height = `${pullDist}px`;
+        const isArmedNow = pullDist >= TRIGGER_PX;
+        if (isArmedNow && !armed) {
+          armed = true;
+          haptic("light");
+        } else if (!isArmedNow && armed) {
+          armed = false;
+        }
+        textEl.textContent = armed ? "Отпустите для обновления" : "Потяните для обновления";
+      },
+      { passive: true }
+    );
+
+    async function endPull() {
+      if (!pulling) return;
+      const shouldRefresh = armed && !ptrRefreshing;
+      pulling = false;
+      armed = false;
+      pullDist = 0;
+      indicatorEl.classList.remove("pulling");
+
+      if (!shouldRefresh) {
+        indicatorEl.style.height = "0px";
+        textEl.textContent = "Потяните для обновления";
+        return;
+      }
+
+      ptrRefreshing = true;
+      indicatorEl.classList.add("refreshing");
+      indicatorEl.style.height = "44px";
+      textEl.textContent = "Обновление...";
+      try {
+        await refreshCurrentView();
+      } catch {} finally {
+        ptrRefreshing = false;
+        indicatorEl.classList.remove("refreshing");
+        indicatorEl.style.height = "0px";
+        textEl.textContent = "Потяните для обновления";
+      }
+    }
+
+    document.addEventListener("touchend", endPull, { passive: true });
+    document.addEventListener("touchcancel", endPull, { passive: true });
+  })();
+
   enableCarouselTouchScroll(document.getElementById("mobileCategoryTabs"));
   enableCarouselTouchScroll(document.getElementById("tagBar"));
 
@@ -5591,6 +6184,7 @@
   applyTheme();
   const initialItemId = restoreStateFromUrl();
   syncSearchQueryState(state.q);
+  hydrateFromTgCloudStorage();
   refreshCurrentView();
   if (initialItemId !== null) {
     openItemById(initialItemId, { skipUrlSync: true });

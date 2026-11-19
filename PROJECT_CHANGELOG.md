@@ -43,6 +43,17 @@
 
 ## 3. Хронология изменений (Лог правок по всем чатам)
 
+### 2026-11-19 (v30) — Этап 5 UI/UX: Пагинация, новые сортировки, Paste/Drop, Hero View Transitions, TMA 8.0+ и Pull-to-Refresh (`app/db/repo.py`, `app/main.py`, `app/tma/`, `tests/test_stage6_tma.py`)
+- **Пагинация, тоталы и новые сортировки (`app/db/repo.py`, `app/main.py`, `app/tma/`)**:
+  - В `app/db/repo.py` выделен `_build_catalog_where`, добавлены `count_items_catalog`, `get_status_counts_by_tab` и поддержка `offset` + 3 новых сортировок (`updated`, `year`, `title`) в `list_items_catalog`.
+  - В `GET /api/items` добавлены `offset`, `total`, `has_more` и `status_counts`; на фронтенде включена загрузка порциями по 100 записей (`CATALOG_PAGE_SIZE`), кнопка `#loadMoreBar`, автоподгрузка через `IntersectionObserver` и ускорение длинных списков через `content-visibility: auto`.
+- **Мгновенный захват, Hero Transitions и Pull-to-Refresh (`app/tma/index.html`, `app/tma/styles.css`, `app/tma/app.js`)**:
+  - Добавлен глобальный `paste` (`Ctrl+V` / `⌘V`) и перетаскивание ссылок/текста на окно (`#globalDropOverlay`, `quickIngestFromDropOrPaste`) с живым статус-тостом `#liveToast` и кнопкой «Открыть».
+  - Внедрены Hero View Transitions (`active-poster` между обложкой в каталоге и `.drawer-poster` в `Detail Drawer`) и мобильный жест Pull-to-Refresh (`#pullRefreshIndicator`, `initPullToRefresh`).
+- **Telegram Mini Apps Bot API 8.0+ и PWA (`app/tma/app.js`, `app/tma/sw.js`)**:
+  - Добавлены учёт `safeAreaInset` / `contentSafeAreaInset` (`syncTmaSafeArea`), переключатель полноэкранного режима (`requestFullscreen`), ярлык на главный экран (`addToHomeScreen`) и синхронизация темы/видов по категориям через `tg.CloudStorage`.
+  - Service Worker (`sw.js`) и версии статических ассетов в `index.html` обновлены до `v30`.
+
 ### 2026-11-19 (v29) — Этап 4 UI/UX: Мультивыбор (Bulk Actions), редакционные «Итоги и дневник» (`/api/stats`) и PWA + Web Share Target (`app/db/repo.py`, `app/main.py`, `app/tma/`, `tests/test_stage6_tma.py`)
 - **Бэкенд массовых операций и статистики (`app/db/repo.py`, `app/main.py`)**:
   - Добавлена функция `bulk_update_items` и эндпоинт `POST /api/items/bulk` (`BulkItemsPayload`) для смены статуса, добавления тега с пересборкой `items_fts` и массового удаления до 200 записей.
