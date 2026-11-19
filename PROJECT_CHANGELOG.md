@@ -43,6 +43,16 @@
 
 ## 3. Хронология изменений (Лог правок по всем чатам)
 
+### 2026-11-19 (v31) — Плавный Hero View Transition при открытии и закрытии детальной карточки (`app/tma/styles.css`, `app/tma/app.js`, `app/tma/index.html`, `app/tma/sw.js`, `tests/test_stage6_tma.py`)
+- **Устранён конфликт анимаций при Hero-переходе (`app/tma/styles.css`, `app/tma/app.js`)**:
+  - На время активного View Transition добавлен класс `html.vt-drawer-active`, который отключает CSS `animation` у `.detail-drawer` и выделяет саму панель в отдельный слой `view-transition-name: detail-drawer-panel` с плавными кривыми `vtDrawerInDesktop` / `vtDrawerOutDesktop` и `vtDrawerInMobile` / `vtDrawerOutMobile`.
+  - Для карточки-источника на время перехода выставляется `.vt-source-card { content-visibility: visible !important; }`, а у `.detail-drawer` смягчена fallback-анимация (`0.22s cubic-bezier(0.22, 1, 0.36, 1)`).
+- **Чистый морф только по `<img>` постера (`app/tma/app.js`, `app/tma/styles.css`)**:
+  - `view-transition-name: active-poster` теперь назначается строго декодированному элементу `<img>` (`el.complete && el.naturalWidth > 0`) на карточке и `.drawer-poster > img` внутри детальной карточки (с `decoding="sync"`), чтобы статусные точки, рейтинг-пилюли и чекбоксы не растягивались вместе с постером.
+  - Настроены `::view-transition-group(active-poster)` (`0.32s cubic-bezier(0.22, 1, 0.36, 1)`), `object-fit: cover` для old/new снимков и скрытие двойного дубля старого снимка (`::view-transition-old(active-poster) { opacity: 0; }`).
+  - Добавлена безопасная очистка `clearActiveHeroTransition()` при быстром повторном клике или ошибке `startViewTransition`.
+- **Кэш и контрактные тесты (`app/tma/index.html`, `app/tma/sw.js`, `tests/test_stage6_tma.py`)**: версии ассетов и Service Worker обновлены до `v31` (`notes-shell-v31`), добавлены проверки контракта Hero View Transition в `test_tma_static_ui_contract`.
+
 ### 2026-11-19 (v30) — Этап 5 UI/UX: Пагинация, новые сортировки, Paste/Drop, Hero View Transitions, TMA 8.0+ и Pull-to-Refresh (`app/db/repo.py`, `app/main.py`, `app/tma/`, `tests/test_stage6_tma.py`)
 - **Пагинация, тоталы и новые сортировки (`app/db/repo.py`, `app/main.py`, `app/tma/`)**:
   - В `app/db/repo.py` выделен `_build_catalog_where`, добавлены `count_items_catalog`, `get_status_counts_by_tab` и поддержка `offset` + 3 новых сортировок (`updated`, `year`, `title`) в `list_items_catalog`.

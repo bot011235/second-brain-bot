@@ -739,10 +739,10 @@ class TestStage6TMA(unittest.TestCase):
         css = (tma_dir / "styles.css").read_text(encoding="utf-8")
         js = (tma_dir / "app.js").read_text(encoding="utf-8")
 
-        # 1. Версия ассетов v30, PWA-манифест + иконки + Service Worker, Literata
-        self.assertIn("./styles.css?v=30", html)
-        self.assertIn("./app.js?v=30", html)
-        self.assertIn("./manifest.webmanifest?v=30", html)
+        # 1. Версия ассетов v31, PWA-манифест + иконки + Service Worker, Literata
+        self.assertIn("./styles.css?v=31", html)
+        self.assertIn("./app.js?v=31", html)
+        self.assertIn("./manifest.webmanifest?v=31", html)
         self.assertEqual(mimetypes.guess_type("manifest.webmanifest")[0], "application/manifest+json")
         self.assertIn("Literata", html)
         self.assertIn('data-mode="posters"', html)
@@ -752,7 +752,7 @@ class TestStage6TMA(unittest.TestCase):
 
         for fname in ("manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
             self.assertTrue((tma_dir / fname).is_file(), f"Missing PWA asset: {fname}")
-        self.assertIn("notes-shell-v30", (tma_dir / "sw.js").read_text(encoding="utf-8"))
+        self.assertIn("notes-shell-v31", (tma_dir / "sw.js").read_text(encoding="utf-8"))
         self.assertTrue((tma_dir / "icon-192.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertTrue((tma_dir / "icon-512.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         manifest = json.loads((tma_dir / "manifest.webmanifest").read_text(encoding="utf-8"))
@@ -825,6 +825,10 @@ class TestStage6TMA(unittest.TestCase):
             "pull-refresh-indicator",
             "global-drop-overlay",
             "live-toast",
+            "vt-drawer-active",
+            "detail-drawer-panel",
+            "vt-source-card",
+            "vt-handled",
         ):
             self.assertIn(token, css)
 
@@ -872,6 +876,8 @@ class TestStage6TMA(unittest.TestCase):
             "syncTmaSafeArea",
             "hydrateFromTgCloudStorage",
             "findCatalogPosterEl",
+            "clearActiveHeroTransition",
+            'decoding="sync"',
         ):
             self.assertIn(token, js)
 

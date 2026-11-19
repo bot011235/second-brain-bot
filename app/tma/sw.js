@@ -1,10 +1,10 @@
-const CACHE_NAME = "notes-shell-v30";
+const CACHE_NAME = "notes-shell-v31";
 const SHELL_ASSETS = [
   "./",
   "./index.html",
-  "./styles.css?v=30",
-  "./app.js?v=30",
-  "./manifest.webmanifest?v=30",
+  "./styles.css?v=31",
+  "./app.js?v=31",
+  "./manifest.webmanifest?v=31",
   "./icon.svg",
   "./icon-192.png",
   "./icon-512.png",

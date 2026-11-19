@@ -1571,7 +1571,7 @@
     drawerCategoryLabel.textContent = CATEGORY_TITLES[item.category] || "Запись";
 
     const posterHtml = item.poster_url
-      ? `<img src="${escapeHtml(item.poster_url)}" alt="${escapeHtml(item.title_ru || "")}" data-lightbox-src="${escapeHtml(item.poster_url)}" />`
+      ? `<img src="${escapeHtml(item.poster_url)}" alt="${escapeHtml(item.title_ru || "")}" decoding="sync" data-lightbox-src="${escapeHtml(item.poster_url)}" />`
       : `<span>${emoji}</span>`;
 
     const yearStr = item.release_year ? ` (${item.release_year})` : "";
@@ -1760,11 +1760,27 @@
     } catch {}
   }
 
+  let activeHeroVtSeq = 0;
+
   function canRunHeroTransition() {
     return (
       typeof document.startViewTransition === "function" &&
       !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
     );
+  }
+
+  function clearActiveHeroTransition(seq = null) {
+    if (seq !== null && seq !== activeHeroVtSeq) return;
+    document.documentElement.classList.remove("vt-drawer-active");
+    document.querySelectorAll(".vt-source-card").forEach((el) => {
+      el.classList.remove("vt-source-card");
+    });
+    document.querySelectorAll('[style*="view-transition-name"]').forEach((el) => {
+      el.style.viewTransitionName = "";
+    });
+    if (state.drawerItemId === null && drawerOverlay) {
+      drawerOverlay.classList.remove("vt-handled");
+    }
   }
 
   function findCatalogPosterEl(itemId) {
@@ -1773,9 +1789,9 @@
     const card = grid.querySelector(`[data-open-id="${Number(itemId)}"]`);
     if (!card) return null;
     const el = card.querySelector(
-      ".poster-cover, .poster-box, .list-poster, .card-video-thumb, .kanban-poster, .list-type-badge"
+      ".poster-cover > img, .poster-box > img, .list-poster > img, .card-video-thumb > img, .kanban-poster > img"
     );
-    if (!el) return null;
+    if (!el || !el.complete || el.naturalWidth <= 0) return null;
     const r = el.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0 || r.bottom <= 0 || r.top >= window.innerHeight) {
       return null;
@@ -1817,26 +1833,33 @@
     state.drawerAddTagMode = false;
 
     if (sourcePoster && canRunHeroTransition()) {
+      const vtSeq = ++activeHeroVtSeq;
+      clearActiveHeroTransition();
+      const sourceCard = sourcePoster.closest(".poster-card, .item-card, .swipe-row-wrap");
       try {
+        document.documentElement.classList.add("vt-drawer-active");
+        if (drawerOverlay) drawerOverlay.classList.add("vt-handled");
+        if (sourceCard) sourceCard.classList.add("vt-source-card");
         sourcePoster.style.viewTransitionName = "active-poster";
         const vt = document.startViewTransition(() => {
           sourcePoster.style.viewTransitionName = "";
           renderDetailDrawer();
-          const dp = drawerBody ? drawerBody.querySelector(".drawer-poster") : null;
+          const dp = drawerBody ? drawerBody.querySelector(".drawer-poster > img") : null;
           if (dp) dp.style.viewTransitionName = "active-poster";
         });
+        if (vt && vt.ready) vt.ready.catch(() => {});
         if (vt && vt.finished) {
-          vt.finished.finally(() => {
-            sourcePoster.style.viewTransitionName = "";
-            const dp = drawerBody ? drawerBody.querySelector(".drawer-poster") : null;
-            if (dp) dp.style.viewTransitionName = "";
-          });
+          vt.finished.finally(() => clearActiveHeroTransition(vtSeq));
+        } else {
+          clearActiveHeroTransition(vtSeq);
         }
       } catch {
-        sourcePoster.style.viewTransitionName = "";
+        clearActiveHeroTransition();
+        if (drawerOverlay) drawerOverlay.classList.remove("vt-handled");
         renderDetailDrawer();
       }
     } else {
+      if (wasClosed && drawerOverlay) drawerOverlay.classList.remove("vt-handled");
       renderDetailDrawer();
     }
 
@@ -1869,8 +1892,15 @@
     if (state.drawerItemId === null && !state.triageCompletedView) return;
     flushPendingNoteSave();
     const closingId = state.drawerItemId;
-    const drawerPoster = !opts.skipTransition && drawerBody ? drawerBody.querySelector(".drawer-poster") : null;
-    const targetPoster = !opts.skipTransition && closingId !== null ? findCatalogPosterEl(closingId) : null;
+    const drawerPoster = !opts.skipTransition && drawerBody ? drawerBody.querySelector(".drawer-poster > img") : null;
+    const targetPoster =
+      !opts.skipTransition &&
+      closingId !== null &&
+      drawerPoster &&
+      drawerPoster.complete &&
+      drawerPoster.naturalWidth > 0
+        ? findCatalogPosterEl(closingId)
+        : null;
 
     state.drawerItemId = null;
     state.externalDrawerItem = null;
@@ -1882,23 +1912,29 @@
     state.luckyMode = false;
 
     if (drawerPoster && targetPoster && canRunHeroTransition()) {
+      const vtSeq = ++activeHeroVtSeq;
+      clearActiveHeroTransition();
+      const targetCard = targetPoster.closest(".poster-card, .item-card, .swipe-row-wrap");
       try {
+        document.documentElement.classList.add("vt-drawer-active");
+        if (targetCard) targetCard.classList.add("vt-source-card");
         drawerPoster.style.viewTransitionName = "active-poster";
         const vt = document.startViewTransition(() => {
           renderDetailDrawer();
           targetPoster.style.viewTransitionName = "active-poster";
         });
+        if (vt && vt.ready) vt.ready.catch(() => {});
         if (vt && vt.finished) {
-          vt.finished.finally(() => {
-            targetPoster.style.viewTransitionName = "";
-          });
+          vt.finished.finally(() => clearActiveHeroTransition(vtSeq));
+        } else {
+          clearActiveHeroTransition(vtSeq);
         }
       } catch {
-        drawerPoster.style.viewTransitionName = "";
-        targetPoster.style.viewTransitionName = "";
+        clearActiveHeroTransition();
         renderDetailDrawer();
       }
     } else {
+      clearActiveHeroTransition();
       renderDetailDrawer();
     }
 
