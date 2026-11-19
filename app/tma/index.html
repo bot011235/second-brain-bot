@@ -4,8 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Notes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,600..700;1,7..72,400&display=swap" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=26" />
+  <link rel="stylesheet" href="./styles.css?v=27" />
 </head>
 <body>
   <div class="app-shell">
@@ -139,6 +142,10 @@
               <button type="button" class="mode-btn active" data-mode="list" title="Компактный список">
                 <span class="nav-ico" data-icon="list"></span>
                 <span>Список</span>
+              </button>
+              <button type="button" class="mode-btn" data-mode="posters" title="Сетка постеров / Полка">
+                <span class="nav-ico" data-icon="posters"></span>
+                <span>Постеры</span>
               </button>
               <button type="button" class="mode-btn" data-mode="cards" title="Сетка карточек">
                 <span class="nav-ico" data-icon="grid"></span>
@@ -336,6 +343,6 @@
     <button type="button" id="undoToastBtn" class="undo-toast-btn">Отменить</button>
   </div>
 
-  <script src="./app.js?v=26"></script>
+  <script src="./app.js?v=27"></script>
 </body>
 </html>

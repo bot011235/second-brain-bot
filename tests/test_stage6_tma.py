@@ -384,7 +384,7 @@ class TestStage6TMA(unittest.TestCase):
         finally:
             settings.llm_for_ideas = old_llm_ideas
 
-    def test_tma_v26_static_ui_contract(self) -> None:
+    def test_tma_static_ui_contract(self) -> None:
         import re
         import app.main as main_mod
 
@@ -394,13 +394,15 @@ class TestStage6TMA(unittest.TestCase):
         css = (tma_dir / "styles.css").read_text(encoding="utf-8")
         js = (tma_dir / "app.js").read_text(encoding="utf-8")
 
-        # 1. Версия ассетов v26 и удаление дубля фильтра статусов
-        self.assertIn("./styles.css?v=26", html)
-        self.assertIn("./app.js?v=26", html)
+        # 1. Версия ассетов v27, шрифт Literata, кнопка Постеры и удаление дубля фильтра статусов
+        self.assertIn("./styles.css?v=27", html)
+        self.assertIn("./app.js?v=27", html)
+        self.assertIn("Literata", html)
+        self.assertIn('data-mode="posters"', html)
         self.assertNotIn("statusFilterSelect", html)
         self.assertNotIn("statusFilterSelect", js)
 
-        # 2. Ключевые элементы и функции Этапа 1 (v26)
+        # 2. Ключевые элементы и стили Этапов 1 и 2 + Swipe 2.0 (v26–v27)
         for token in (
             'id="ratingPopover"',
             'id="emptyStateActions"',
@@ -410,13 +412,25 @@ class TestStage6TMA(unittest.TestCase):
             self.assertIn(token, html)
 
         for token in (
+            '"Literata"',
             "drawer-status-pill",
             "drawer-rate-btn",
             "swipe-row-wrap",
+            "swipe-tray-left",
+            "swipe-tray-right",
+            "swipe-tray-btn",
+            "full-armed",
+            "touch-action: pan-y",
             "topbar-hidden",
             "rating-popover",
             "list-mobile-actions",
             "--cat-accent-color",
+            "view-posters",
+            "poster-card",
+            "poster-video",
+            "card-video-thumb",
+            "list-summary-snippet",
+            "list-type-badge",
         ):
             self.assertIn(token, css)
 
@@ -431,6 +445,14 @@ class TestStage6TMA(unittest.TestCase):
             "drawer-status-pill",
             "drawer-rate-btn",
             "topbar-hidden",
+            "sb_view_modes_by_tab_v1",
+            "getViewModeForTab",
+            "renderPosterCard",
+            "getSwipeRightActions",
+            "closeOpenSwipeRow",
+            "suppressSwipeClickUntil",
+            "estimateReadingMinutes",
+            "page_count",
         ):
             self.assertIn(token, js)
 

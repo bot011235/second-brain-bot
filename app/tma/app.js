@@ -35,8 +35,10 @@
     search: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`,
     sliders: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="2" x2="6" y1="14" y2="14"/><line x1="10" x2="14" y1="8" y2="8"/><line x1="18" x2="22" y1="16" y2="16"/></svg>`,
     list: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>`,
+    posters: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="10" x="3" y="3" rx="1.5"/><rect width="7" height="10" x="14" y="3" rx="1.5"/><path d="M3 17h7"/><path d="M14 17h7"/><path d="M3 20.5h5"/><path d="M14 20.5h5"/></svg>`,
     grid: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>`,
     kanban: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/></svg>`,
+    play: `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="7 4 20 12 7 20 7 4"/></svg>`,
     sun: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>`,
     moon: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>`,
     auto: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v18"/><path d="M12 8l5-3"/><path d="M12 13l6-3.5"/><path d="M12 18l5-3"/></svg>`,
@@ -86,10 +88,46 @@
 
   const savedThemeMode = localStorage.getItem("sb_theme_mode");
   const savedViewMode = localStorage.getItem("sb_view_mode");
+  const VALID_VIEW_MODES = ["list", "posters", "cards", "kanban"];
+  const DEFAULT_VIEW_BY_TAB = {
+    "": VALID_VIEW_MODES.includes(savedViewMode) ? savedViewMode : "list",
+    movies: "posters",
+    books: "posters",
+    video: "cards",
+    article: "list",
+    ideas: "list",
+  };
+
+  let viewModesByTab = {};
+  try {
+    const rawMap = localStorage.getItem("sb_view_modes_by_tab_v1");
+    if (rawMap) {
+      const parsedMap = JSON.parse(rawMap);
+      if (parsedMap && typeof parsedMap === "object") {
+        viewModesByTab = parsedMap;
+      }
+    }
+  } catch {}
+
+  function getViewModeForTab(tabKey) {
+    const k = tabKey || "";
+    const stored = viewModesByTab[k];
+    if (VALID_VIEW_MODES.includes(stored)) return stored;
+    return DEFAULT_VIEW_BY_TAB[k] || "list";
+  }
+
+  function saveViewModeForTab(tabKey, mode) {
+    const k = tabKey || "";
+    viewModesByTab[k] = mode;
+    try {
+      localStorage.setItem("sb_view_modes_by_tab_v1", JSON.stringify(viewModesByTab));
+      if (k === "") localStorage.setItem("sb_view_mode", mode);
+    } catch {}
+  }
 
   const state = {
     view: "catalog",
-    viewMode: ["list", "cards", "kanban"].includes(savedViewMode) ? savedViewMode : "list",
+    viewMode: getViewModeForTab(""),
     themeMode: ["auto", "light", "dark"].includes(savedThemeMode)
       ? savedThemeMode
       : tg && tg.colorScheme
@@ -592,6 +630,24 @@
   const statusPopoverEl = document.getElementById("statusPopover");
   const ratingPopoverEl = document.getElementById("ratingPopover");
 
+  let openSwipeWrap = null;
+  let suppressSwipeClickUntil = 0;
+
+  function closeOpenSwipeRow(exceptWrap = null) {
+    if (!openSwipeWrap || openSwipeWrap === exceptWrap) return;
+    const wrap = openSwipeWrap;
+    openSwipeWrap = null;
+    wrap.classList.remove("swipe-open-left", "swipe-open-right");
+    const row = wrap.querySelector(".list-row");
+    if (row) {
+      row.classList.remove("swiping");
+      row.style.transform = "";
+    }
+    wrap.querySelectorAll(".swipe-tray").forEach((tray) => {
+      tray.classList.remove("visible", "interactive", "full-armed");
+    });
+  }
+
   function closeStatusPopover() {
     if (state.statusPopoverItemId === null) return;
     state.statusPopoverItemId = null;
@@ -968,11 +1024,91 @@
     return "";
   }
 
-  function buildDrawerReaderHtml(item) {
+  function isVideoItem(item) {
+    return Boolean(item && (item.category || "").toLowerCase() === "video");
+  }
+
+  function isTextOnlyCategory(item) {
+    if (!item) return false;
+    const cat = (item.category || "").toLowerCase();
+    return ["idea", "post", "article"].includes(cat) && !item.poster_url;
+  }
+
+  function buildItemDomainLabel(item) {
+    const visual = resolveSourceVisual(getPrimarySourceUrl(item));
+    return visual ? visual.label : "";
+  }
+
+  function getDrawerReaderText(item) {
+    if (!item) return "";
     const sourceLongText = (item.sources || [])
       .map((s) => (s.raw_text || "").trim())
       .find((t) => t && !/^https?:\/\/\S+$/i.test(t) && t.length > (item.summary || "").trim().length + 40);
-    const fullReaderText = (item.extracted_text || "").trim() || sourceLongText || "";
+    return (item.extracted_text || "").trim() || sourceLongText || "";
+  }
+
+  function estimateReadingMinutes(text) {
+    const clean = String(text || "").trim();
+    if (!clean) return 0;
+    const words = clean.split(/\s+/).filter(Boolean).length;
+    if (words < 60) return 0;
+    return Math.max(1, Math.round(words / 200));
+  }
+
+  function getPrimaryPosterScore(item) {
+    if (!item) return null;
+    if (item.user_rating) {
+      return { text: `★ ${item.user_rating}`, isUser: true };
+    }
+    const meta = parseMeta(item.meta);
+    if (item.category === "book") {
+      const fl = meta.rating_fantlab ?? item.rating_kp;
+      if (fl != null) return { text: `FL ${fl}`, isUser: false };
+      const gr = meta.rating_goodreads ?? item.rating_imdb;
+      if (gr != null) return { text: `g ${gr}`, isUser: false };
+      return null;
+    }
+    if (item.rating_imdb != null) return { text: `IMDb ${item.rating_imdb}`, isUser: false };
+    if (item.rating_kp != null) return { text: `КП ${item.rating_kp}`, isUser: false };
+    if (meta.rating_tmdb != null) return { text: `TMDB ${meta.rating_tmdb}`, isUser: false };
+    if (item.rating_rt != null) return { text: `${item.rating_rt}%`, isUser: false };
+    return null;
+  }
+
+  function getSwipeRightActions(curStatus) {
+    const st = curStatus || "inbox";
+    if (st === "inbox") {
+      return [
+        { status: "planned", label: "В планах", tone: "st-tone-planned", svg: STATUS_META.planned.svg },
+        { status: "done", label: "Готово", tone: "st-tone-done", svg: STATUS_META.done.svg },
+      ];
+    }
+    if (st === "planned") {
+      return [
+        { status: "in_progress", label: "В процессе", tone: "st-tone-progress", svg: STATUS_META.in_progress.svg },
+        { status: "done", label: "Готово", tone: "st-tone-done", svg: STATUS_META.done.svg },
+      ];
+    }
+    if (st === "in_progress") {
+      return [
+        { status: "done", label: "Готово", tone: "st-tone-done", svg: STATUS_META.done.svg },
+        { status: "planned", label: "В планах", tone: "st-tone-planned", svg: STATUS_META.planned.svg },
+      ];
+    }
+    if (st === "done") {
+      return [
+        { status: "planned", label: "В планах", tone: "st-tone-planned", svg: STATUS_META.planned.svg },
+        { status: "inbox", label: "Входящие", tone: "st-tone-inbox", svg: STATUS_META.inbox.svg },
+      ];
+    }
+    return [
+      { status: "planned", label: "В планах", tone: "st-tone-planned", svg: STATUS_META.planned.svg },
+      { status: "done", label: "Готово", tone: "st-tone-done", svg: STATUS_META.done.svg },
+    ];
+  }
+
+  function buildDrawerReaderHtml(item) {
+    const fullReaderText = getDrawerReaderText(item);
     if (!fullReaderText) return "";
     return `
       <details class="drawer-section drawer-reader-box">
@@ -1103,7 +1239,21 @@
     if (item.category === "series" && meta.seasons_count) {
       subParts.push(`📺 Сезонов: ${Number(meta.seasons_count)}`);
     }
-    const creatorHtml = subParts.length ? `<div class="drawer-creator">${subParts.join(" · ")}</div>` : "";
+    if (item.category === "book" && meta.page_count) {
+      subParts.push(`📖 ${Number(meta.page_count)} стр.`);
+    }
+    let readTimeSpan = "";
+    if (["article", "post"].includes(item.category)) {
+      const domLabel = buildItemDomainLabel(item);
+      if (domLabel) subParts.push(`🌐 ${escapeHtml(domLabel)}`);
+      const readMin = estimateReadingMinutes(getDrawerReaderText(item));
+      const readText = readMin ? `${subParts.length ? " · " : ""}⏱ ~${readMin} мин чтения` : "";
+      readTimeSpan = `<span id="drawerReadTimeSlot">${readText}</span>`;
+    }
+    const creatorHtml =
+      subParts.length || readTimeSpan
+        ? `<div class="drawer-creator">${subParts.join(" · ")}${readTimeSpan}</div>`
+        : "";
     const addedLabel = formatAddedDate(item.created_at);
     const addedDateHtml = addedLabel ? `<div class="drawer-date-meta">Добавлено ${escapeHtml(addedLabel)}</div>` : "";
 
@@ -1127,7 +1277,15 @@
     const ytSectionHtml = ytId
       ? `
         <div class="drawer-section">
-          <button type="button" class="liquid-pill drawer-yt-btn" data-play-yt="${escapeHtml(ytId)}">▶️ Смотреть видео прямо здесь</button>
+          ${
+            item.poster_url
+              ? `<button type="button" class="drawer-video-hero" data-play-yt="${escapeHtml(ytId)}" aria-label="Смотреть видео">
+                  <img src="${escapeHtml(item.poster_url)}" alt="${escapeHtml(item.title_ru || "")}" />
+                  <span class="poster-play-badge large">${UI_ICONS.play}</span>
+                  <span class="drawer-video-hero-label">▶ Смотреть видео здесь</span>
+                </button>`
+              : `<button type="button" class="liquid-pill drawer-yt-btn" data-play-yt="${escapeHtml(ytId)}">▶️ Смотреть видео прямо здесь</button>`
+          }
           <div id="drawerYtContainer"></div>
         </div>
       `
@@ -1216,6 +1374,12 @@
         if (readerSlot) {
           readerSlot.innerHTML = buildDrawerReaderHtml(fresh);
         }
+        const readTimeSlot = document.getElementById("drawerReadTimeSlot");
+        const readMin = estimateReadingMinutes(fresh.extracted_text);
+        if (readTimeSlot && readMin) {
+          const hasPrevText = Boolean(readTimeSlot.previousSibling && String(readTimeSlot.previousSibling.textContent || "").trim());
+          readTimeSlot.textContent = `${hasPrevText ? " · " : ""}⏱ ~${readMin} мин чтения`;
+        }
       }
     } catch {}
   }
@@ -1223,6 +1387,7 @@
   function openDetailDrawer(itemId) {
     closeStatusPopover();
     closeRatingPopover();
+    closeOpenSwipeRow();
     if (state.drawerItemId !== null && Number(state.drawerItemId) !== Number(itemId)) {
       flushPendingNoteSave();
     }
@@ -1477,6 +1642,7 @@
     ];
     const modeOpts = [
       { v: "list", l: "☰ Список" },
+      { v: "posters", l: "🖼 Постеры" },
       { v: "cards", l: "⊞ Карточки" },
       { v: "kanban", l: "▥ Канбан" },
     ];
@@ -1586,6 +1752,7 @@
   function openFiltersSheet() {
     closeStatusPopover();
     closeRatingPopover();
+    closeOpenSwipeRow();
     state.filtersSheetOpen = true;
     renderFiltersSheet();
     filtersSheetOverlay.classList.remove("hidden");
@@ -1625,6 +1792,7 @@
     if (tabBtn) {
       state.tab = tabBtn.dataset.sheetTab || "";
       state.tag = "";
+      state.viewMode = getViewModeForTab(state.tab);
       refreshCurrentView();
       renderFiltersSheet();
       haptic("selection");
@@ -1668,6 +1836,7 @@
       state.status = "all";
       state.sort = "created";
       state.tag = "";
+      state.viewMode = getViewModeForTab("");
       document.getElementById("sortSelect").value = "created";
       const mobSort = document.getElementById("mobileSortSelect");
       if (mobSort) mobSort.value = "created";
@@ -1800,18 +1969,29 @@
     });
   }
 
-  function getNextCycleStatus(curStatus) {
-    const order = ["inbox", "planned", "in_progress", "done"];
-    const idx = order.indexOf(curStatus || "inbox");
-    return order[(idx === -1 ? 0 : idx + 1) % order.length];
-  }
-
   function renderListRow(item) {
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     const catClass = `cat-${escapeHtml(item.category || "idea")}`;
-    const posterHtml = item.poster_url
-      ? `<img src="${escapeHtml(item.poster_url)}" alt="" loading="lazy" />`
-      : `<span>${emoji}</span>`;
+    const isVideo = isVideoItem(item);
+    const isTextOnly = isTextOnlyCategory(item);
+    const primaryUrl = getPrimarySourceUrl(item);
+    const sourceVisual = resolveSourceVisual(primaryUrl);
+
+    let leftVisualHtml = "";
+    if (isTextOnly) {
+      const innerIco = sourceVisual ? sourceVisual.iconHtml : `<span>${emoji}</span>`;
+      leftVisualHtml = `<div class="list-type-badge">${innerIco}</div>`;
+    } else if (isVideo) {
+      const posterHtml = item.poster_url
+        ? `<img src="${escapeHtml(item.poster_url)}" alt="" loading="lazy" />`
+        : `<span>${emoji}</span>`;
+      leftVisualHtml = `<div class="list-poster poster-video">${posterHtml}<span class="poster-play-badge">${UI_ICONS.play}</span></div>`;
+    } else {
+      const posterHtml = item.poster_url
+        ? `<img src="${escapeHtml(item.poster_url)}" alt="" loading="lazy" />`
+        : `<span>${emoji}</span>`;
+      leftVisualHtml = `<div class="list-poster">${posterHtml}</div>`;
+    }
 
     const yearHtml = item.release_year ? `<span class="list-year">(${item.release_year})</span>` : "";
     const origHtml =
@@ -1825,6 +2005,19 @@
     if (item.category === "series" && meta.seasons_count) {
       subParts.push(`Сезонов: ${Number(meta.seasons_count)}`);
     }
+    if (item.category === "book" && meta.page_count) {
+      subParts.push(`${Number(meta.page_count)} стр.`);
+    }
+
+    const cleanSummary = (item.summary || "").trim();
+    const showSnippet =
+      isTextOnly &&
+      cleanSummary &&
+      cleanSummary.toLowerCase() !== (item.title_ru || "").trim().toLowerCase();
+    const snippetHtml = showSnippet
+      ? `<div class="list-summary-snippet">${escapeHtml(cleanSummary)}</div>`
+      : "";
+
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
     const noteBadgeHtml = meta.user_note
       ? `<div class="list-note-badge" title="${escapeHtml(meta.user_note)}">✍️ ${escapeHtml(meta.user_note)}</div>`
@@ -1834,26 +2027,30 @@
     const desktopActionsHtml = buildCardActionsHtml(item, "list-actions");
     const mobileActionsHtml = buildCardActionsHtml(item, "mobile-inline");
 
-    const nextStatus = getNextCycleStatus(item.status);
-    const nextMeta = STATUS_META[nextStatus] || STATUS_META.planned;
+    const rightActions = getSwipeRightActions(item.status);
+    const leftTrayBtns = rightActions
+      .map(
+        (act, idx) =>
+          `<button type="button" class="swipe-tray-btn ${act.tone} ${idx === 0 ? "is-primary" : "is-secondary"}" data-swipe-status="${act.status}" data-id="${item.id}">${act.svg}<span>${escapeHtml(act.label)}</span></button>`
+      )
+      .join("");
+    const rightTrayBtns = `
+      <button type="button" class="swipe-tray-btn st-tone-rate is-secondary" data-swipe-rate="${item.id}">${UI_ICONS.starFilled}<span>Оценка</span></button>
+      <button type="button" class="swipe-tray-btn st-tone-delete is-primary" data-swipe-delete="${item.id}">${UI_ICONS.trash}<span>Удалить</span></button>
+    `;
 
     return `
       <div class="swipe-row-wrap" data-swipe-id="${item.id}">
-        <div class="swipe-track swipe-track-left" aria-hidden="true">
-          <span style="display:inline-flex;">${nextMeta.svg}</span>
-          <span>→ ${escapeHtml(nextMeta.label)}</span>
-        </div>
-        <div class="swipe-track swipe-track-right" aria-hidden="true">
-          <span>Удалить</span>
-          ${UI_ICONS.trash}
-        </div>
+        <div class="swipe-tray swipe-tray-left" aria-hidden="true">${leftTrayBtns}</div>
+        <div class="swipe-tray swipe-tray-right" aria-hidden="true">${rightTrayBtns}</div>
         <article class="list-row cat-accent ${catClass}" data-open-id="${item.id}">
-          <div class="list-poster">${posterHtml}</div>
+          ${leftVisualHtml}
           <div class="list-main">
             <div class="list-title-line">
               <span class="list-title">${escapeHtml(item.title_ru)}</span>${yearHtml ? ` ${yearHtml}` : ""}${origHtml ? ` ${origHtml}` : ""}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}
             </div>
             ${subParts.length ? `<div class="list-subline">${subParts.join(" · ")}</div>` : ""}
+            ${snippetHtml}
             ${ratingsHtml ? `<div class="list-ratings">${ratingsHtml}</div>` : ""}
             ${noteBadgeHtml}
             ${tagsHtml}
@@ -1870,6 +2067,8 @@
   function renderEditorialCard(item) {
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     const catClass = `cat-${escapeHtml(item.category || "idea")}`;
+    const isVideo = isVideoItem(item);
+    const isTextOnly = isTextOnlyCategory(item);
     const posterHtml = item.poster_url
       ? `<img src="${escapeHtml(item.poster_url)}" alt="" loading="lazy" />`
       : `<span>${emoji}</span>`;
@@ -1886,6 +2085,9 @@
     if (item.category === "series" && meta.seasons_count) {
       subParts.push(`📺 Сезонов: ${Number(meta.seasons_count)}`);
     }
+    if (item.category === "book" && meta.page_count) {
+      subParts.push(`📖 ${Number(meta.page_count)} стр.`);
+    }
     const creatorLine = subParts.length ? `<div class="card-creator">${subParts.join(" · ")}</div>` : "";
 
     const genresHtml = buildTagsLineHtml(item, "genres-line", "genre-pill");
@@ -1897,8 +2099,37 @@
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
     const cornerSourceHtml = buildCornerSourceHtml(item);
 
-    return `
-      <article class="item-card cat-accent ${catClass}" data-open-id="${item.id}">
+    let topBlockHtml = "";
+    if (isVideo && item.poster_url) {
+      topBlockHtml = `
+        <div class="card-video-thumb">
+          <img src="${escapeHtml(item.poster_url)}" alt="" loading="lazy" />
+          <span class="poster-play-badge large">${UI_ICONS.play}</span>
+        </div>
+        <div class="card-info">
+          <div class="card-title">${escapeHtml(item.title_ru)}${yearStr}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}</div>
+          ${origLine}
+          ${creatorLine}
+          ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
+          ${noteBadgeHtml}
+        </div>
+      `;
+    } else if (isTextOnly) {
+      const visual = resolveSourceVisual(getPrimarySourceUrl(item));
+      const eyebrowIco = visual ? visual.iconHtml : `<span>${emoji}</span>`;
+      const eyebrowLabel = visual ? visual.safeLabel : escapeHtml(CATEGORY_TITLES[item.category] || "Запись");
+      topBlockHtml = `
+        <div class="card-info">
+          <div class="card-eyebrow">${eyebrowIco}<span>${eyebrowLabel}</span></div>
+          <div class="card-title">${escapeHtml(item.title_ru)}${yearStr}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}</div>
+          ${origLine}
+          ${creatorLine}
+          ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
+          ${noteBadgeHtml}
+        </div>
+      `;
+    } else {
+      topBlockHtml = `
         <div class="card-top">
           <div class="poster-box">${posterHtml}</div>
           <div class="card-info">
@@ -1909,6 +2140,12 @@
             ${noteBadgeHtml}
           </div>
         </div>
+      `;
+    }
+
+    return `
+      <article class="item-card cat-accent ${catClass}${isVideo ? " is-video" : ""}" data-open-id="${item.id}">
+        ${topBlockHtml}
         ${genresHtml}
         ${summaryHtml}
         <div class="card-footer">
@@ -1918,9 +2155,85 @@
     `;
   }
 
+  function renderPosterCard(item) {
+    const emoji = CATEGORY_EMOJI[item.category] || "📌";
+    const catClass = `cat-${escapeHtml(item.category || "idea")}`;
+    const isVideo = isVideoItem(item);
+    const stMeta = STATUS_META[item.status] || STATUS_META.inbox;
+    const scoreBadge = getPrimaryPosterScore(item);
+    const cornerSourceHtml = buildCornerSourceHtml(item);
+    const meta = parseMeta(item.meta);
+
+    let coverInner = "";
+    if (item.poster_url) {
+      const playBadge = isVideo ? `<span class="poster-play-badge large">${UI_ICONS.play}</span>` : "";
+      coverInner = `<img src="${escapeHtml(item.poster_url)}" alt="${escapeHtml(item.title_ru || "")}" loading="lazy" />${playBadge}`;
+    } else {
+      const visual = resolveSourceVisual(getPrimarySourceUrl(item));
+      const fallbackHeadIco = visual ? visual.iconHtml : `<span>${emoji}</span>`;
+      const fallbackHeadLabel = visual ? visual.safeLabel : escapeHtml(CATEGORY_TITLES[item.category] || "Запись");
+      const snippet = item.summary ? `<div class="poster-fallback-snippet">${escapeHtml(item.summary)}</div>` : "";
+      coverInner = `
+        <div class="poster-fallback-cover">
+          <div class="poster-fallback-head">${fallbackHeadIco}<span>${fallbackHeadLabel}</span></div>
+          <div class="poster-fallback-title">${escapeHtml(item.title_ru || "Без названия")}</div>
+          ${snippet}
+        </div>
+      `;
+    }
+
+    const scoreHtml = scoreBadge
+      ? `<div class="poster-score-pill ${scoreBadge.isUser ? "is-user-score" : ""}">${escapeHtml(scoreBadge.text)}</div>`
+      : "";
+
+    const subParts = [];
+    if (item.release_year) subParts.push(String(item.release_year));
+    if (shouldShowCreator(item)) subParts.push(escapeHtml(item.creator));
+    if (item.category === "series" && meta.seasons_count) {
+      subParts.push(`${Number(meta.seasons_count)} сез.`);
+    }
+    if (!subParts.length) {
+      const domLabel = buildItemDomainLabel(item);
+      if (domLabel) subParts.push(escapeHtml(domLabel));
+    }
+
+    const currentRating = Number(item.user_rating || 0);
+    const rateBtnLabel = currentRating ? `★ ${currentRating}` : "Оценка";
+
+    return `
+      <article class="poster-card ${catClass}${isVideo ? " is-video-poster" : ""}" data-open-id="${item.id}">
+        <div class="poster-cover">
+          ${coverInner}
+          <button type="button" class="poster-status-dot-btn" data-action="status-menu" data-id="${item.id}" title="Статус: ${escapeHtml(stMeta.label)}" aria-label="Статус: ${escapeHtml(stMeta.label)}">
+            <span style="display:inline-flex;color:${stMeta.dot};">${stMeta.svg}</span>
+          </button>
+          ${scoreHtml}
+          <div class="poster-hover-bar">
+            <button type="button" class="poster-hover-btn" data-action="status-menu" data-id="${item.id}" aria-label="Статус">
+              <span style="display:inline-flex;color:${stMeta.dot};">${stMeta.svg}</span>
+              <span>${escapeHtml(stMeta.short)}</span>
+            </button>
+            <button type="button" class="poster-hover-btn" data-action="rating-menu" data-id="${item.id}" aria-label="Моя оценка">
+              <span>${rateBtnLabel}</span>
+            </button>
+          </div>
+        </div>
+        <div class="poster-caption">
+          <div class="poster-title-row">
+            <div class="poster-title">${escapeHtml(item.title_ru || "Без названия")}</div>
+            ${cornerSourceHtml}
+          </div>
+          ${subParts.length ? `<div class="poster-meta-line">${subParts.join(" · ")}</div>` : ""}
+        </div>
+      </article>
+    `;
+  }
+
   function renderKanbanCard(item) {
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     const catClass = `cat-${escapeHtml(item.category || "idea")}`;
+    const isVideo = isVideoItem(item);
+    const isTextOnly = isTextOnlyCategory(item);
     const posterHtml = item.poster_url
       ? `<img src="${escapeHtml(item.poster_url)}" alt="" loading="lazy" />`
       : `<span>${emoji}</span>`;
@@ -1928,15 +2241,25 @@
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
     const cornerSourceHtml = buildCornerSourceHtml(item);
 
+    const mediaBlock = isTextOnly
+      ? ""
+      : `<div class="kanban-poster${isVideo ? " poster-video" : ""}">${posterHtml}${isVideo ? `<span class="poster-play-badge">${UI_ICONS.play}</span>` : ""}</div>`;
+    const cleanSummary = (item.summary || "").trim();
+    const snippetHtml =
+      isTextOnly && cleanSummary && cleanSummary.toLowerCase() !== (item.title_ru || "").trim().toLowerCase()
+        ? `<div class="kanban-snippet">${escapeHtml(cleanSummary)}</div>`
+        : "";
+
     return `
       <article class="kanban-card cat-accent ${catClass}" data-open-id="${item.id}" draggable="true" data-drag-id="${item.id}">
         <div class="kanban-card-top">
-          <div class="kanban-poster">${posterHtml}</div>
+          ${mediaBlock}
           <div class="kanban-card-meta">
             <div class="list-title" style="font-size:14.5px;">${escapeHtml(item.title_ru)}${yearStr}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}</div>
             ${shouldShowCreator(item) ? `<div class="list-subline" style="font-size:12px;">${escapeHtml(item.creator)}</div>` : ""}
           </div>
         </div>
+        ${snippetHtml}
         ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
         <div class="card-footer" style="padding-top:8px;">
           ${buildCardActionsHtml(item, "kanban-actions")}
@@ -2105,6 +2428,7 @@
 
   function renderCatalog(opts = {}) {
     const { skipDrawer = false } = opts;
+    openSwipeWrap = null;
     const container = document.getElementById("catalogContainer");
     const grid = document.getElementById("catalogGrid");
     const empty = document.getElementById("emptyState");
@@ -2129,6 +2453,10 @@
       const { html, colCount } = renderKanbanBoard();
       grid.className = `catalog-list view-kanban${colCount === 5 ? " cols-5" : ""}`;
       grid.innerHTML = html;
+    } else if (state.viewMode === "posters") {
+      const isWideVideo = state.tab === "video";
+      grid.className = `catalog-list view-posters${isWideVideo ? " view-posters-wide" : ""}`;
+      grid.innerHTML = state.items.map(renderPosterCard).join("");
     } else if (state.viewMode === "cards") {
       grid.className = "catalog-list view-cards";
       grid.innerHTML = state.items.map(renderEditorialCard).join("");
@@ -2215,11 +2543,12 @@
   // ==================== СИНХРОНИЗАЦИЯ НАВИГАЦИИ И ДАННЫХ ====================
 
   function setViewMode(mode) {
-    if (!["list", "cards", "kanban"].includes(mode)) return;
+    if (!VALID_VIEW_MODES.includes(mode)) return;
     closeStatusPopover();
     closeRatingPopover();
+    closeOpenSwipeRow();
     state.viewMode = mode;
-    localStorage.setItem("sb_view_mode", mode);
+    saveViewModeForTab(state.tab, mode);
     syncNavigationState();
     if (state.view === "catalog") {
       withViewTransition(() => renderCatalog());
@@ -2228,7 +2557,7 @@
   }
 
   function cycleViewMode() {
-    const order = ["list", "cards", "kanban"];
+    const order = VALID_VIEW_MODES;
     const next = order[(order.indexOf(state.viewMode) + 1) % order.length];
     setViewMode(next);
   }
@@ -2252,6 +2581,7 @@
     const mobModeIcon = document.getElementById("viewModeIconMobile");
     const modeMeta = {
       list: { icon: "list", title: "Вид: Список (нажмите для смены)" },
+      posters: { icon: "posters", title: "Вид: Постеры (нажмите для смены)" },
       cards: { icon: "grid", title: "Вид: Карточки (нажмите для смены)" },
       kanban: { icon: "kanban", title: "Вид: Канбан (нажмите для смены)" },
     }[state.viewMode] || { icon: "list", title: "Вид: Список (нажмите для смены)" };
@@ -2443,6 +2773,7 @@
   function refreshCurrentView() {
     closeStatusPopover();
     closeRatingPopover();
+    closeOpenSwipeRow();
     showMobileTopbar();
     syncNavigationState();
     if (state.view === "originals") {
@@ -2745,6 +3076,7 @@
       if (!btn) return;
       state.tab = btn.dataset.tab || "";
       state.tag = "";
+      state.viewMode = getViewModeForTab(state.tab);
       refreshCurrentView();
       haptic("selection");
     });
@@ -2924,6 +3256,7 @@
   function openQuickAddModal() {
     closeStatusPopover();
     closeRatingPopover();
+    closeOpenSwipeRow();
     closeFiltersSheet();
     closeCmdPalette();
     state.quickAddOpen = true;
@@ -3052,12 +3385,13 @@
       { id: "act-add", group: "Действия", label: "➕ Добавить запись", sub: "Клавиша N", run: () => openQuickAddModal() },
       { id: "act-lucky", group: "Действия", label: "🎲 Мне повезёт", sub: "Случайный выбор", run: () => pickRandomItem() },
       { id: "act-list", group: "Вид", label: "☰ Вид: Список", sub: "", run: () => setViewMode("list") },
+      { id: "act-posters", group: "Вид", label: "🖼 Вид: Постеры", sub: "", run: () => setViewMode("posters") },
       { id: "act-cards", group: "Вид", label: "⊞ Вид: Карточки", sub: "", run: () => setViewMode("cards") },
       { id: "act-kanban", group: "Вид", label: "▥ Вид: Канбан", sub: "", run: () => setViewMode("kanban") },
       { id: "act-theme", group: "Настройки", label: "🌗 Сменить тему (Бумага / Чернила)", sub: "", run: () => cycleThemeMode() },
-      { id: "act-cat-all", group: "Категории", label: "📚 Все записи", sub: "", run: () => { state.view = "catalog"; state.tab = ""; refreshCurrentView(); } },
-      { id: "act-cat-movies", group: "Категории", label: "🎬 Кино и сериалы", sub: "", run: () => { state.view = "catalog"; state.tab = "movies"; refreshCurrentView(); } },
-      { id: "act-cat-books", group: "Категории", label: "📚 Книги", sub: "", run: () => { state.view = "catalog"; state.tab = "books"; refreshCurrentView(); } },
+      { id: "act-cat-all", group: "Категории", label: "📚 Все записи", sub: "", run: () => { state.view = "catalog"; state.tab = ""; state.viewMode = getViewModeForTab(""); refreshCurrentView(); } },
+      { id: "act-cat-movies", group: "Категории", label: "🎬 Кино и сериалы", sub: "", run: () => { state.view = "catalog"; state.tab = "movies"; state.viewMode = getViewModeForTab("movies"); refreshCurrentView(); } },
+      { id: "act-cat-books", group: "Категории", label: "📚 Книги", sub: "", run: () => { state.view = "catalog"; state.tab = "books"; state.viewMode = getViewModeForTab("books"); refreshCurrentView(); } },
       { id: "act-cat-orig", group: "Разделы", label: "📥 Открыть Оригиналы", sub: "", run: () => { state.view = "originals"; refreshCurrentView(); } },
     ];
     const filteredActions = q
@@ -3227,43 +3561,60 @@
   bindSheetSwipeToClose(quickAddSheet, closeQuickAddModal);
 
   (function bindMobileRowSwipe() {
+    const TRAY_WIDTH = 148;
+    const SNAP_THRESHOLD = 52;
+
+    let wrapEl = null;
     let rowEl = null;
-    let leftTrack = null;
-    let rightTrack = null;
+    let leftTray = null;
+    let rightTray = null;
     let itemId = null;
     let startX = 0;
     let startY = 0;
-    let currentDx = 0;
+    let baseOffset = 0;
+    let currentX = 0;
     let locked = null;
-    let thresholdArmed = false;
+    let snapArmed = false;
+    let fullArmed = false;
+
+    function getFullThreshold(row) {
+      return Math.max(175, Math.round((row.offsetWidth || 340) * 0.48));
+    }
 
     catalogGridEl.addEventListener(
       "touchstart",
       (e) => {
         if (window.innerWidth > 820 || state.view !== "catalog" || state.viewMode !== "list") return;
         if (e.touches.length !== 1) return;
+        if (e.target.closest(".swipe-tray")) return;
         const x = e.touches[0].clientX;
-        if (x < 28 || x > window.innerWidth - 28) return;
+        if (x < 24 || x > window.innerWidth - 24) return;
         if (e.target.closest("a, button, select, option, .list-tags")) return;
         const row = e.target.closest(".list-row[data-open-id]");
         if (!row) return;
         const wrap = row.closest(".swipe-row-wrap");
+        if (!wrap) return;
+
+        if (openSwipeWrap && openSwipeWrap !== wrap) {
+          closeOpenSwipeRow(wrap);
+        }
+
+        wrapEl = wrap;
         rowEl = row;
-        leftTrack = wrap ? wrap.querySelector(".swipe-track-left") : null;
-        rightTrack = wrap ? wrap.querySelector(".swipe-track-right") : null;
+        leftTray = wrap.querySelector(".swipe-tray-left");
+        rightTray = wrap.querySelector(".swipe-tray-right");
         itemId = Number(row.dataset.openId);
         startX = x;
         startY = e.touches[0].clientY;
-        currentDx = 0;
+        baseOffset = wrap.classList.contains("swipe-open-left")
+          ? TRAY_WIDTH
+          : wrap.classList.contains("swipe-open-right")
+          ? -TRAY_WIDTH
+          : 0;
+        currentX = baseOffset;
         locked = null;
-        thresholdArmed = false;
-
-        if (leftTrack) {
-          const it = state.items.find((i) => Number(i.id) === itemId);
-          const nextSt = getNextCycleStatus(it ? it.status : "inbox");
-          const nextMeta = STATUS_META[nextSt] || STATUS_META.planned;
-          leftTrack.innerHTML = `<span style="display:inline-flex;">${nextMeta.svg}</span><span>→ ${escapeHtml(nextMeta.label)}</span>`;
-        }
+        snapArmed = Math.abs(baseOffset) >= SNAP_THRESHOLD;
+        fullArmed = false;
       },
       { passive: true }
     );
@@ -3276,34 +3627,57 @@
         const dy = e.touches[0].clientY - startY;
         if (locked === null) {
           if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
-          if (Math.abs(dx) > Math.abs(dy) * 1.8) {
+          if (Math.abs(dx) > Math.abs(dy) * 1.6) {
             locked = "x";
             rowEl.classList.add("swiping");
+            if (leftTray) leftTray.classList.remove("interactive");
+            if (rightTray) rightTray.classList.remove("interactive");
           } else {
             locked = "y";
+            wrapEl = null;
             rowEl = null;
-            leftTrack = null;
-            rightTrack = null;
+            leftTray = null;
+            rightTray = null;
             return;
           }
         }
         if (locked === "x") {
-          currentDx = Math.max(-120, Math.min(120, dx));
-          rowEl.style.transform = `translateX(${currentDx}px)`;
-          if (leftTrack) {
-            leftTrack.classList.toggle("visible", currentDx > 10);
-            leftTrack.classList.toggle("armed", currentDx >= 75);
+          const rawTarget = baseOffset + dx;
+          const maxDrag = Math.max(220, Math.round((rowEl.offsetWidth || 360) * 0.72));
+          if (Math.abs(rawTarget) > TRAY_WIDTH) {
+            const sign = rawTarget > 0 ? 1 : -1;
+            const extra = Math.abs(rawTarget) - TRAY_WIDTH;
+            currentX = sign * Math.min(maxDrag, TRAY_WIDTH + extra * 0.85);
+          } else {
+            currentX = rawTarget;
           }
-          if (rightTrack) {
-            rightTrack.classList.toggle("visible", currentDx < -10);
-            rightTrack.classList.toggle("armed", currentDx <= -75);
+
+          rowEl.style.transform = `translateX(${Math.round(currentX)}px)`;
+          const fullThreshold = getFullThreshold(rowEl);
+
+          if (leftTray) {
+            leftTray.classList.toggle("visible", currentX > 8);
+            leftTray.classList.toggle("full-armed", currentX >= fullThreshold);
           }
-          const isArmedNow = Math.abs(currentDx) >= 75;
-          if (isArmedNow && !thresholdArmed) {
-            thresholdArmed = true;
+          if (rightTray) {
+            rightTray.classList.toggle("visible", currentX < -8);
+            rightTray.classList.toggle("full-armed", currentX <= -fullThreshold);
+          }
+
+          const fullNow = Math.abs(currentX) >= fullThreshold;
+          const snapNow = Math.abs(currentX) >= SNAP_THRESHOLD;
+          if (fullNow && !fullArmed) {
+            fullArmed = true;
+            snapArmed = true;
             haptic("medium");
-          } else if (!isArmedNow && thresholdArmed) {
-            thresholdArmed = false;
+          } else if (!fullNow && fullArmed) {
+            fullArmed = false;
+          }
+          if (snapNow && !snapArmed) {
+            snapArmed = true;
+            haptic("light");
+          } else if (!snapNow && snapArmed) {
+            snapArmed = false;
           }
         }
       },
@@ -3311,33 +3685,92 @@
     );
 
     const endSwipe = () => {
-      if (!rowEl) return;
+      if (!rowEl || !wrapEl) return;
+      const targetWrap = wrapEl;
       const targetRow = rowEl;
-      const targetLeft = leftTrack;
-      const targetRight = rightTrack;
+      const targetLeft = leftTray;
+      const targetRight = rightTray;
       const targetId = itemId;
-      const dx = currentDx;
+      const xEnd = currentX;
       const wasLockedX = locked === "x";
-      rowEl = null;
-      leftTrack = null;
-      rightTrack = null;
-      itemId = null;
-      currentDx = 0;
-      locked = null;
-      thresholdArmed = false;
-      targetRow.classList.remove("swiping");
-      targetRow.style.transform = "";
-      if (targetLeft) targetLeft.classList.remove("visible", "armed");
-      if (targetRight) targetRight.classList.remove("visible", "armed");
-      if (!wasLockedX || !targetId) return;
+      const fullThreshold = getFullThreshold(targetRow);
 
-      if (dx > 75) {
-        const it = state.items.find((i) => Number(i.id) === targetId);
-        const nextStatus = getNextCycleStatus(it ? it.status : "inbox");
-        patchItem(targetId, { status: nextStatus });
-      } else if (dx < -75) {
-        deleteItem(targetId);
+      wrapEl = null;
+      rowEl = null;
+      leftTray = null;
+      rightTray = null;
+      itemId = null;
+      baseOffset = 0;
+      currentX = 0;
+      locked = null;
+      snapArmed = false;
+      fullArmed = false;
+
+      targetRow.classList.remove("swiping");
+      if (wasLockedX) {
+        suppressSwipeClickUntil = Date.now() + 280;
+      } else {
+        return;
       }
+      if (!targetId) return;
+
+      if (xEnd >= fullThreshold) {
+        targetRow.style.transform = "";
+        targetWrap.classList.remove("swipe-open-left", "swipe-open-right");
+        if (targetLeft) targetLeft.classList.remove("visible", "interactive", "full-armed");
+        if (targetRight) targetRight.classList.remove("visible", "interactive", "full-armed");
+        if (openSwipeWrap === targetWrap) openSwipeWrap = null;
+
+        const it = state.items.find((i) => Number(i.id) === targetId);
+        const primaryAct = getSwipeRightActions(it ? it.status : "inbox")[0];
+        if (primaryAct) {
+          haptic("medium");
+          patchItem(targetId, { status: primaryAct.status });
+        }
+        return;
+      }
+
+      if (xEnd <= -fullThreshold) {
+        targetRow.style.transform = "";
+        targetWrap.classList.remove("swipe-open-left", "swipe-open-right");
+        if (targetLeft) targetLeft.classList.remove("visible", "interactive", "full-armed");
+        if (targetRight) targetRight.classList.remove("visible", "interactive", "full-armed");
+        if (openSwipeWrap === targetWrap) openSwipeWrap = null;
+        deleteItem(targetId);
+        return;
+      }
+
+      if (xEnd >= SNAP_THRESHOLD) {
+        targetRow.style.transform = `translateX(${TRAY_WIDTH}px)`;
+        targetWrap.classList.add("swipe-open-left");
+        targetWrap.classList.remove("swipe-open-right");
+        if (targetLeft) {
+          targetLeft.classList.add("visible", "interactive");
+          targetLeft.classList.remove("full-armed");
+        }
+        if (targetRight) targetRight.classList.remove("visible", "interactive", "full-armed");
+        openSwipeWrap = targetWrap;
+        return;
+      }
+
+      if (xEnd <= -SNAP_THRESHOLD) {
+        targetRow.style.transform = `translateX(-${TRAY_WIDTH}px)`;
+        targetWrap.classList.add("swipe-open-right");
+        targetWrap.classList.remove("swipe-open-left");
+        if (targetRight) {
+          targetRight.classList.add("visible", "interactive");
+          targetRight.classList.remove("full-armed");
+        }
+        if (targetLeft) targetLeft.classList.remove("visible", "interactive", "full-armed");
+        openSwipeWrap = targetWrap;
+        return;
+      }
+
+      targetRow.style.transform = "";
+      targetWrap.classList.remove("swipe-open-left", "swipe-open-right");
+      if (targetLeft) targetLeft.classList.remove("visible", "interactive", "full-armed");
+      if (targetRight) targetRight.classList.remove("visible", "interactive", "full-armed");
+      if (openSwipeWrap === targetWrap) openSwipeWrap = null;
     };
 
     catalogGridEl.addEventListener("touchend", endSwipe, { passive: true });
@@ -3345,6 +3778,47 @@
   })();
 
   catalogGridEl.addEventListener("click", (e) => {
+    if (Date.now() < suppressSwipeClickUntil) return;
+
+    const swipeStatusBtn = e.target.closest("[data-swipe-status]");
+    if (swipeStatusBtn && swipeStatusBtn.dataset.id) {
+      e.stopPropagation();
+      const id = Number(swipeStatusBtn.dataset.id);
+      const nextSt = swipeStatusBtn.dataset.swipeStatus;
+      closeOpenSwipeRow();
+      haptic("selection");
+      patchItem(id, { status: nextSt });
+      return;
+    }
+
+    const swipeRateBtn = e.target.closest("[data-swipe-rate]");
+    if (swipeRateBtn && swipeRateBtn.dataset.swipeRate) {
+      e.stopPropagation();
+      const id = Number(swipeRateBtn.dataset.swipeRate);
+      const wrap = swipeRateBtn.closest(".swipe-row-wrap");
+      const anchor = wrap
+        ? wrap.querySelector(".list-mobile-actions .liquid-rating-btn") || wrap.querySelector(".list-row")
+        : swipeRateBtn;
+      closeOpenSwipeRow();
+      if (anchor) openRatingPopover(id, anchor);
+      return;
+    }
+
+    const swipeDelBtn = e.target.closest("[data-swipe-delete]");
+    if (swipeDelBtn && swipeDelBtn.dataset.swipeDelete) {
+      e.stopPropagation();
+      const id = Number(swipeDelBtn.dataset.swipeDelete);
+      closeOpenSwipeRow();
+      deleteItem(id);
+      return;
+    }
+
+    if (openSwipeWrap && !e.target.closest(".swipe-tray")) {
+      const clickedOpenRow = openSwipeWrap.contains(e.target);
+      closeOpenSwipeRow();
+      if (clickedOpenRow) return;
+    }
+
     const stBtn = e.target.closest("[data-action='status-menu']");
     if (stBtn && stBtn.dataset.id) {
       e.stopPropagation();
@@ -3422,6 +3896,7 @@
         if (deskSort) deskSort.value = "created";
         const mobSort = document.getElementById("mobileSortSelect");
         if (mobSort) mobSort.value = "created";
+        state.viewMode = getViewModeForTab("");
         refreshCurrentView();
         haptic("selection");
         return;
@@ -3439,6 +3914,9 @@
     if (!e.target.closest("#ratingPopover") && !e.target.closest("[data-action='rating-menu']")) {
       closeRatingPopover();
     }
+    if (openSwipeWrap && !openSwipeWrap.contains(e.target)) {
+      closeOpenSwipeRow();
+    }
   });
 
   document.addEventListener("keydown", (e) => {
@@ -3452,6 +3930,7 @@
     if (e.key === "Escape") {
       closeStatusPopover();
       closeRatingPopover();
+      closeOpenSwipeRow();
       closePosterLightbox();
       closeCmdPalette();
       closeQuickAddModal();
@@ -3507,6 +3986,7 @@
       () => {
         closeStatusPopover();
         closeRatingPopover();
+        closeOpenSwipeRow();
         if (window.innerWidth > 820) {
           tb.classList.remove("topbar-hidden");
           lastScrollY = window.scrollY || 0;
