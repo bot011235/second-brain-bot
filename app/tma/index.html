@@ -4,11 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Notes</title>
+  <link rel="manifest" href="./manifest.webmanifest?v=29" />
+  <meta name="theme-color" content="#fbf8f3" id="metaThemeColor" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Notes" />
+  <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+  <link rel="apple-touch-icon" href="./icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,600..700;1,7..72,400&display=swap" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=28" />
+  <link rel="stylesheet" href="./styles.css?v=29" />
 </head>
 <body>
   <div class="app-shell">
@@ -36,6 +43,10 @@
           <button type="button" class="nav-btn active" data-view="catalog">
             <span class="nav-ico" data-icon="library"></span>
             <span>Каталог</span>
+          </button>
+          <button type="button" class="nav-btn" data-view="stats">
+            <span class="nav-ico" data-icon="chart"></span>
+            <span>Итоги</span>
           </button>
           <button type="button" class="nav-btn" data-view="originals">
             <span class="nav-ico" data-icon="inbox"></span>
@@ -226,6 +237,10 @@
       <span class="nav-ico" data-icon="library"></span>
       <span>Каталог</span>
     </button>
+    <button type="button" class="bottom-btn" data-view="stats">
+      <span class="nav-ico" data-icon="chart"></span>
+      <span>Итоги</span>
+    </button>
     <button type="button" class="bottom-btn" data-view="originals">
       <span class="nav-ico" data-icon="inbox"></span>
       <span>Оригиналы</span>
@@ -372,6 +387,7 @@
           <div class="shortcut-row"><span>Мне повезёт</span><kbd class="kbd-hint">L</kbd></div>
           <div class="shortcut-row"><span>Навигация вверх / вниз</span><kbd class="kbd-hint">J / K</kbd></div>
           <div class="shortcut-row"><span>Открыть выбранную</span><kbd class="kbd-hint">Enter</kbd></div>
+          <div class="shortcut-row"><span>Выбрать запись (мультивыбор)</span><kbd class="kbd-hint">X</kbd></div>
           <div class="shortcut-row"><span>Эта справка</span><kbd class="kbd-hint">?</kbd></div>
         </div>
         <div class="shortcut-group">
@@ -394,12 +410,33 @@
     <img id="lightboxImg" class="lightbox-img" src="" alt="" />
   </div>
 
+  <!-- Плавающая панель массовых действий (Bulk Actions) -->
+  <div id="bulkActionBar" class="bulk-action-bar hidden" role="region" aria-label="Массовые действия">
+    <span class="bulk-count-pill" id="bulkCountLabel">Выбрано: 0</span>
+    <button type="button" class="bulk-bar-btn" id="bulkSelectAllBtn">Выбрать все</button>
+    <select id="bulkStatusSelect" class="bulk-status-select" aria-label="Сменить статус выбранным">
+      <option value="">Статус ▾</option>
+      <option value="inbox">📥 Входящие</option>
+      <option value="planned">📌 В планах</option>
+      <option value="in_progress">▶️ В процессе</option>
+      <option value="done">✅ Готово</option>
+      <option value="dropped">🚫 Брошено</option>
+    </select>
+    <button type="button" class="bulk-bar-btn" id="bulkTagBtn">+ Тег</button>
+    <div id="bulkTagWrap" class="bulk-tag-wrap hidden">
+      <input type="text" id="bulkTagInput" class="bulk-tag-input" placeholder="тег..." autocomplete="off" />
+      <button type="button" class="bulk-bar-btn" id="bulkTagApplyBtn">OK</button>
+    </div>
+    <button type="button" class="bulk-bar-btn danger" id="bulkDeleteBtn">Удалить</button>
+    <button type="button" class="icon-btn" id="bulkClearBtn" title="Снять выделение (Esc)" aria-label="Снять выделение">✕</button>
+  </div>
+
   <!-- Плавающий тост безопасного удаления (Undo Toast) -->
   <div id="undoToast" class="undo-toast hidden" role="status" aria-live="polite">
     <span id="undoToastText">Запись удалена</span>
     <button type="button" id="undoToastBtn" class="undo-toast-btn">Отменить</button>
   </div>
 
-  <script src="./app.js?v=28"></script>
+  <script src="./app.js?v=29"></script>
 </body>
 </html>

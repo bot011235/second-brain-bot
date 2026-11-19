@@ -516,7 +516,118 @@ class TestStage6TMA(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_stage4_bulk_actions_and_stats(self) -> None:
+        from unittest.mock import patch
+        from fastapi import HTTPException
+        import app.main as main_mod
+
+        conn = get_connection(":memory:")
+        apply_migrations(conn)
+
+        class _NoCloseConn:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+            def close(self):
+                return None
+
+        it_movie = repo.create_item(
+            conn,
+            category="movie",
+            title_ru="Бегущий по лезвию",
+            status="planned",
+            tags=["cyberpunk", "sci-fi"],
+        )
+        it_book = repo.create_item(
+            conn,
+            category="book",
+            title_ru="Солярис",
+            creator="Станислав Лем",
+            status="inbox",
+            tags=["sci-fi"],
+        )
+        it_article = repo.create_item(
+            conn,
+            category="article",
+            title_ru="Заметка для удаления",
+            status="inbox",
+            tags=["temp"],
+        )
+        repo.update_item_fields(
+            conn,
+            it_movie["id"],
+            user_rating=9,
+            user_note="Лучший нео-нуар",
+        )
+        repo.update_item_fields(conn, it_book["id"], user_rating=7)
+
+        try:
+            # 1. Bulk смена статуса и добавление тега с пересборкой FTS5
+            bulk_st = repo.bulk_update_items(conn, [it_movie["id"], it_book["id"]], status="done")
+            self.assertEqual(bulk_st["action"], "status")
+            self.assertEqual(bulk_st["affected"], 2)
+
+            bulk_tag = repo.bulk_update_items(conn, [it_movie["id"], it_book["id"]], add_tag="#must-watch")
+            self.assertEqual(bulk_tag["action"], "add_tag")
+            self.assertEqual(bulk_tag["tag"], "must-watch")
+            self.assertEqual(bulk_tag["affected"], 2)
+
+            tag_hits = repo.list_items_catalog(conn, q="#must-watch")
+            self.assertEqual({x["id"] for x in tag_hits}, {it_movie["id"], it_book["id"]})
+
+            with self.assertRaises(ValueError):
+                repo.bulk_update_items(conn, [it_movie["id"]], status="unknown_status")
+
+            # 2. Агрегированная статистика и дневник
+            stats = repo.get_catalog_stats(conn)
+            self.assertEqual(stats["summary"]["total"], 3)
+            self.assertEqual(stats["summary"]["done"], 2)
+            self.assertEqual(stats["summary"]["inbox"], 1)
+            self.assertEqual(stats["summary"]["rated_count"], 2)
+            self.assertEqual(stats["summary"]["avg_user_rating"], 8.0)
+            self.assertEqual(stats["summary"]["noted_count"], 1)
+
+            self.assertEqual([c["tab"] for c in stats["by_category"]], ["movies", "books", "video", "article", "ideas"])
+            self.assertEqual(len(stats["ratings_distribution"]), 10)
+            r_map = {r["rating"]: r["count"] for r in stats["ratings_distribution"]}
+            self.assertEqual(r_map[9], 1)
+            self.assertEqual(r_map[7], 1)
+            self.assertTrue(any(t["tag"] == "sci-fi" and t["count"] == 2 for t in stats["top_tags"]))
+            self.assertEqual({d["id"] for d in stats["diary"]}, {it_movie["id"], it_book["id"]})
+
+            stats_empty_yr = repo.get_catalog_stats(conn, year=2099)
+            self.assertEqual(stats_empty_yr["summary"]["total"], 0)
+            self.assertEqual(len(stats_empty_yr["monthly"]), 12)
+
+            # 3. Прямые вызовы FastAPI-эндпоинтов /api/stats и /api/items/bulk
+            wrapped = _NoCloseConn(conn)
+            with patch.object(main_mod, "get_connection", return_value=wrapped):
+                api_stats = main_mod.api_get_stats(year=None, _user={"id": 349407845})
+                self.assertEqual(api_stats["summary"]["done"], 2)
+
+                api_del = main_mod.api_bulk_items(
+                    main_mod.BulkItemsPayload(item_ids=[it_article["id"]], delete=True),
+                    _user={"id": 349407845},
+                )
+                self.assertEqual(api_del["action"], "delete")
+                self.assertEqual(api_del["affected"], 1)
+
+                with self.assertRaises(HTTPException) as ctx:
+                    main_mod.api_bulk_items(
+                        main_mod.BulkItemsPayload(item_ids=[it_movie["id"]], status="invalid"),
+                        _user={"id": 349407845},
+                    )
+                self.assertEqual(ctx.exception.status_code, 400)
+
+            self.assertIsNone(repo.get_item(conn, it_article["id"]))
+        finally:
+            conn.close()
+
     def test_tma_static_ui_contract(self) -> None:
+        import mimetypes
         import re
         import app.main as main_mod
 
@@ -526,16 +637,25 @@ class TestStage6TMA(unittest.TestCase):
         css = (tma_dir / "styles.css").read_text(encoding="utf-8")
         js = (tma_dir / "app.js").read_text(encoding="utf-8")
 
-        # 1. Версия ассетов v28, шрифт Literata, кнопка Постеры и удаление дубля фильтра статусов
-        self.assertIn("./styles.css?v=28", html)
-        self.assertIn("./app.js?v=28", html)
+        # 1. Версия ассетов v29, PWA-манифест + иконки + Service Worker, Literata
+        self.assertIn("./styles.css?v=29", html)
+        self.assertIn("./app.js?v=29", html)
+        self.assertIn("./manifest.webmanifest?v=29", html)
+        self.assertEqual(mimetypes.guess_type("manifest.webmanifest")[0], "application/manifest+json")
         self.assertIn("Literata", html)
         self.assertIn('data-mode="posters"', html)
         self.assertNotIn("statusFilterSelect", html)
         self.assertNotIn("statusFilterSelect", js)
         self.assertIsNone(re.search(r"\bstate\.tag\b", js))
 
-        # 2. Ключевые элементы и стили Этапов 1–3 (v26–v28)
+        for fname in ("manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
+            self.assertTrue((tma_dir / fname).is_file(), f"Missing PWA asset: {fname}")
+        self.assertTrue((tma_dir / "icon-192.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertTrue((tma_dir / "icon-512.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+        manifest = json.loads((tma_dir / "manifest.webmanifest").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["share_target"]["params"]["url"], "share_url")
+
+        # 2. Ключевые элементы и стили Этапов 1–4 (v26–v29)
         for token in (
             'id="ratingPopover"',
             'id="emptyStateActions"',
@@ -547,6 +667,11 @@ class TestStage6TMA(unittest.TestCase):
             'id="shortcutsOverlay"',
             'id="shortcutsCloseBtn"',
             'id="shortcutsHelpBtnDesktop"',
+            'id="bulkActionBar"',
+            'id="bulkStatusSelect"',
+            'id="bulkDeleteBtn"',
+            'id="metaThemeColor"',
+            'data-view="stats"',
         ):
             self.assertIn(token, html)
 
@@ -578,6 +703,11 @@ class TestStage6TMA(unittest.TestCase):
             "triage-chip",
             "cmd-loading-hint",
             "chip-x",
+            "bulk-action-bar",
+            "bulk-select-cb",
+            "stats-dashboard",
+            "stats-histogram",
+            "stats-diary-row",
         ):
             self.assertIn(token, css)
 
@@ -613,6 +743,12 @@ class TestStage6TMA(unittest.TestCase):
             "closeShortcutsModal",
             "pickRandomItem",
             "externalDrawerItem",
+            "toggleBulkSelect",
+            "runBulkAction",
+            "loadStats",
+            "renderStats",
+            "pendingShareText",
+            "serviceWorker",
         ):
             self.assertIn(token, js)
 

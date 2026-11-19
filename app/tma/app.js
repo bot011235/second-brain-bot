@@ -7,12 +7,29 @@
     } catch {}
   }
 
-  // Извлекаем ключ доступа из query-параметров (?key=...) и сохраняем в localStorage
+  // Извлекаем ключ доступа (?key=...) и данные Web Share Target (?share_title/text/url=...)
   const urlParams = new URLSearchParams(window.location.search);
   const keyParam = urlParams.get("key");
-  if (keyParam) {
-    localStorage.setItem("sb_access_key", keyParam.trim());
+  const shareTitle = (urlParams.get("share_title") || "").trim();
+  const shareText = (urlParams.get("share_text") || "").trim();
+  const shareUrl = (urlParams.get("share_url") || "").trim();
+  const shareParts = [];
+  if (shareUrl) {
+    shareParts.push(shareUrl);
+    if (shareTitle && !shareTitle.includes(shareUrl)) shareParts.push(shareTitle);
+    if (shareText && !shareText.includes(shareUrl) && shareText !== shareTitle) shareParts.push(shareText);
+  } else {
+    if (shareTitle) shareParts.push(shareTitle);
+    if (shareText && shareText !== shareTitle) shareParts.push(shareText);
+  }
+  let pendingShareText = shareParts.join("\n").trim();
+
+  if (keyParam || shareTitle || shareText || shareUrl) {
+    if (keyParam) localStorage.setItem("sb_access_key", keyParam.trim());
     urlParams.delete("key");
+    urlParams.delete("share_title");
+    urlParams.delete("share_text");
+    urlParams.delete("share_url");
     const cleanSearch = urlParams.toString();
     const cleanUrl = window.location.pathname + (cleanSearch ? `?${cleanSearch}` : "") + window.location.hash;
     window.history.replaceState({}, "", cleanUrl);
@@ -27,8 +44,21 @@
     document.documentElement.classList.add("is-tma");
   }
 
+  let deferredInstallPrompt = null;
+  if (!isTgWebApp && "serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./sw.js").catch(() => undefined);
+    });
+  }
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+  });
+
   const UI_ICONS = {
     library: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>`,
+    chart: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect width="4" height="7" x="7" y="10" rx="1"/><rect width="4" height="12" x="15" y="5" rx="1"/></svg>`,
+    checkSquare: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="3"/><path d="m9 12 2 2 4-4"/></svg>`,
     inbox: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>`,
     refresh: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>`,
     logout: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>`,
@@ -185,6 +215,12 @@
     luckyMode: false,
     luckySeenIds: new Set(),
     focusedIndex: -1,
+    statsData: null,
+    statsYear: "",
+    selectedIds: new Set(),
+    lastSelectedId: null,
+    bulkDeleteConfirm: false,
+    bulkTagOpen: false,
     statusCountsByTab: {},
     expandedTagIds: new Set(),
   };
@@ -203,12 +239,16 @@
     try {
       const params = new URLSearchParams();
       if (state.view && state.view !== "catalog") params.set("view", state.view);
-      if (state.tab) params.set("tab", state.tab);
-      if (state.smart) params.set("smart", state.smart);
-      if (state.status && state.status !== "all") params.set("status", state.status);
-      if (state.tags.length) params.set("tags", state.tags.join(","));
-      if (state.q) params.set("q", state.q);
-      if (state.sort && state.sort !== "created") params.set("sort", state.sort);
+      if (state.view === "stats" && state.statsYear) {
+        params.set("year", String(state.statsYear));
+      } else {
+        if (state.tab) params.set("tab", state.tab);
+        if (state.smart) params.set("smart", state.smart);
+        if (state.status && state.status !== "all") params.set("status", state.status);
+        if (state.tags.length) params.set("tags", state.tags.join(","));
+        if (state.q) params.set("q", state.q);
+        if (state.sort && state.sort !== "created") params.set("sort", state.sort);
+      }
       if (state.drawerItemId !== null && !state.triageCompletedView) {
         params.set("item", String(state.drawerItemId));
       }
@@ -228,7 +268,9 @@
     try {
       const p = new URLSearchParams(window.location.search);
       const viewP = p.get("view");
-      state.view = viewP === "originals" ? "originals" : "catalog";
+      state.view = viewP === "originals" ? "originals" : viewP === "stats" ? "stats" : "catalog";
+      const yearP = p.get("year") || "";
+      state.statsYear = /^\d{4}$/.test(yearP) ? yearP : "";
       state.tab = p.get("tab") || "";
       const smartP = p.get("smart") || "";
       state.smart = SMART_VIEWS_META[smartP] ? smartP : "";
@@ -262,6 +304,7 @@
   let itemsAbort = null;
   let tagsAbort = null;
   let originalsAbort = null;
+  let statsAbort = null;
 
   const STATUS_META = {
     inbox: {
@@ -352,6 +395,11 @@
     const deskLabel = document.getElementById("themeLabelDesktop");
     if (deskIcon) deskIcon.innerHTML = UI_ICONS[iconKey];
     if (deskLabel) deskLabel.textContent = labelText;
+
+    const metaTheme = document.getElementById("metaThemeColor");
+    if (metaTheme) {
+      metaTheme.setAttribute("content", effective === "dark" ? "#171513" : "#fbf8f3");
+    }
 
     if (tg) {
       const bgHex = effective === "dark" ? "#171513" : "#fbf8f3";
@@ -470,9 +518,17 @@
     }
   }
 
+  function consumePendingShareTarget() {
+    if (!pendingShareText) return;
+    const shared = pendingShareText;
+    pendingShareText = "";
+    openQuickAddModal({ prefillText: shared });
+  }
+
   function hideAuthModal() {
     if (authModal) authModal.classList.add("hidden");
     if (authErrorMsg) authErrorMsg.classList.add("hidden");
+    consumePendingShareTarget();
   }
 
   if (authForm) {
@@ -2081,9 +2137,25 @@
           </div>
         </div>
 
-        <button type="button" class="confirm-cancel-btn" id="sheetResetFiltersBtn" style="width:100%;padding:10px;">
-          Сбросить фильтры
-        </button>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${
+            state.items.length
+              ? `<button type="button" class="confirm-cancel-btn" id="sheetBulkToggleBtn" style="width:100%;padding:10px;">
+                  ${state.selectedIds.size ? `Снять выделение (${state.selectedIds.size})` : "☑ Мультивыбор записей"}
+                </button>`
+              : ""
+          }
+          <button type="button" class="confirm-cancel-btn" id="sheetResetFiltersBtn" style="width:100%;padding:10px;">
+            Сбросить фильтры
+          </button>
+          ${
+            deferredInstallPrompt
+              ? `<button type="button" class="auth-submit-btn" id="sheetInstallPwaBtn" style="width:100%;padding:10px;">
+                  📲 Установить приложение (PWA)
+                </button>`
+              : ""
+          }
+        </div>
       `
           : `<div class="drawer-section"><p style="font-size:13.5px;color:var(--muted);">Фильтры по категориям, статусу, тегам и сортировке доступны в разделе «Каталог».</p></div>`
       }
@@ -2115,7 +2187,29 @@
     if (e.target === filtersSheetOverlay) closeFiltersSheet();
   });
 
-  filtersSheetBody.addEventListener("click", (e) => {
+  filtersSheetBody.addEventListener("click", async (e) => {
+    if (e.target.closest("#sheetInstallPwaBtn")) {
+      if (deferredInstallPrompt) {
+        const promptEvt = deferredInstallPrompt;
+        deferredInstallPrompt = null;
+        try {
+          promptEvt.prompt();
+          await promptEvt.userChoice;
+        } catch {}
+      }
+      closeFiltersSheet();
+      return;
+    }
+
+    if (e.target.closest("#sheetBulkToggleBtn")) {
+      if (state.selectedIds.size > 0) {
+        clearBulkSelection();
+      } else if (state.items.length > 0) {
+        toggleBulkSelect(state.items[0].id);
+      }
+      closeFiltersSheet();
+      return;
+    }
     const modeBtn = e.target.closest("[data-sheet-mode]");
     if (modeBtn) {
       setViewMode(modeBtn.dataset.sheetMode);
@@ -2329,7 +2423,14 @@
     });
   }
 
+  function buildBulkCheckboxHtml(item) {
+    const numId = Number(item.id);
+    const isSel = state.selectedIds.has(numId);
+    return `<button type="button" class="bulk-select-cb${isSel ? " checked" : ""}" data-bulk-toggle="${numId}" aria-label="Выбрать запись" aria-pressed="${isSel ? "true" : "false"}">${isSel ? "✓" : ""}</button>`;
+  }
+
   function renderListRow(item) {
+    const isSel = state.selectedIds.has(Number(item.id));
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     const catClass = `cat-${escapeHtml(item.category || "idea")}`;
     const isVideo = isVideoItem(item);
@@ -2403,7 +2504,8 @@
       <div class="swipe-row-wrap" data-swipe-id="${item.id}">
         <div class="swipe-tray swipe-tray-left" aria-hidden="true">${leftTrayBtns}</div>
         <div class="swipe-tray swipe-tray-right" aria-hidden="true">${rightTrayBtns}</div>
-        <article class="list-row cat-accent ${catClass}" data-open-id="${item.id}">
+        <article class="list-row cat-accent ${catClass}${isSel ? " is-selected" : ""}" data-open-id="${item.id}">
+          ${buildBulkCheckboxHtml(item)}
           ${leftVisualHtml}
           <div class="list-main">
             <div class="list-title-line">
@@ -2425,6 +2527,7 @@
   }
 
   function renderEditorialCard(item) {
+    const isSel = state.selectedIds.has(Number(item.id));
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     const catClass = `cat-${escapeHtml(item.category || "idea")}`;
     const isVideo = isVideoItem(item);
@@ -2504,7 +2607,8 @@
     }
 
     return `
-      <article class="item-card cat-accent ${catClass}${isVideo ? " is-video" : ""}" data-open-id="${item.id}">
+      <article class="item-card cat-accent ${catClass}${isVideo ? " is-video" : ""}${isSel ? " is-selected" : ""}" data-open-id="${item.id}">
+        ${buildBulkCheckboxHtml(item)}
         ${topBlockHtml}
         ${genresHtml}
         ${summaryHtml}
@@ -2516,6 +2620,7 @@
   }
 
   function renderPosterCard(item) {
+    const isSel = state.selectedIds.has(Number(item.id));
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     const catClass = `cat-${escapeHtml(item.category || "idea")}`;
     const isVideo = isVideoItem(item);
@@ -2561,12 +2666,13 @@
     const rateBtnLabel = currentRating ? `★ ${currentRating}` : "Оценка";
 
     return `
-      <article class="poster-card ${catClass}${isVideo ? " is-video-poster" : ""}" data-open-id="${item.id}">
+      <article class="poster-card ${catClass}${isVideo ? " is-video-poster" : ""}${isSel ? " is-selected" : ""}" data-open-id="${item.id}">
         <div class="poster-cover">
           ${coverInner}
           <button type="button" class="poster-status-dot-btn" data-action="status-menu" data-id="${item.id}" title="Статус: ${escapeHtml(stMeta.label)}" aria-label="Статус: ${escapeHtml(stMeta.label)}">
             <span style="display:inline-flex;color:${stMeta.dot};">${stMeta.svg}</span>
           </button>
+          ${buildBulkCheckboxHtml(item)}
           ${scoreHtml}
           <div class="poster-hover-bar">
             <button type="button" class="poster-hover-btn" data-action="status-menu" data-id="${item.id}" aria-label="Статус">
@@ -2590,6 +2696,7 @@
   }
 
   function renderKanbanCard(item) {
+    const isSel = state.selectedIds.has(Number(item.id));
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     const catClass = `cat-${escapeHtml(item.category || "idea")}`;
     const isVideo = isVideoItem(item);
@@ -2611,7 +2718,8 @@
         : "";
 
     return `
-      <article class="kanban-card cat-accent ${catClass}" data-open-id="${item.id}" draggable="true" data-drag-id="${item.id}">
+      <article class="kanban-card cat-accent ${catClass}${isSel ? " is-selected" : ""}" data-open-id="${item.id}" draggable="true" data-drag-id="${item.id}">
+        ${buildBulkCheckboxHtml(item)}
         <div class="kanban-card-top">
           ${mediaBlock}
           <div class="kanban-card-meta">
@@ -2811,10 +2919,134 @@
     empty.classList.remove("hidden");
   }
 
+  function syncBulkCardsInPlace() {
+    const grid = document.getElementById("catalogGrid");
+    if (!grid || state.view !== "catalog") return;
+    grid.classList.toggle("bulk-selecting", state.selectedIds.size > 0);
+    grid.querySelectorAll("[data-open-id]").forEach((card) => {
+      const idNum = Number(card.dataset.openId);
+      const isSel = state.selectedIds.has(idNum);
+      card.classList.toggle("is-selected", isSel);
+      const cb = card.querySelector("[data-bulk-toggle]");
+      if (cb) {
+        cb.classList.toggle("checked", isSel);
+        cb.textContent = isSel ? "✓" : "";
+        cb.setAttribute("aria-pressed", isSel ? "true" : "false");
+      }
+    });
+  }
+
+  function renderBulkActionBar() {
+    const bar = document.getElementById("bulkActionBar");
+    if (!bar) return;
+    const cnt = state.selectedIds.size;
+    if (state.view !== "catalog" || cnt === 0) {
+      bar.classList.add("hidden");
+      const sel = document.getElementById("bulkStatusSelect");
+      if (sel) sel.value = "";
+      return;
+    }
+    bar.classList.remove("hidden");
+    const cntEl = document.getElementById("bulkCountLabel");
+    if (cntEl) cntEl.textContent = `Выбрано: ${cnt}`;
+    const allBtn = document.getElementById("bulkSelectAllBtn");
+    if (allBtn) {
+      allBtn.textContent = cnt >= state.items.length && state.items.length > 0 ? "Снять все" : "Выбрать все";
+    }
+    const tagWrap = document.getElementById("bulkTagWrap");
+    if (tagWrap) tagWrap.classList.toggle("hidden", !state.bulkTagOpen);
+    const delBtn = document.getElementById("bulkDeleteBtn");
+    if (delBtn) {
+      delBtn.classList.toggle("confirming", state.bulkDeleteConfirm);
+      delBtn.textContent = state.bulkDeleteConfirm ? `Удалить (${cnt})?` : "Удалить";
+    }
+  }
+
+  function clearBulkSelection() {
+    if (state.selectedIds.size === 0 && !state.bulkDeleteConfirm && !state.bulkTagOpen) {
+      renderBulkActionBar();
+      return;
+    }
+    state.selectedIds.clear();
+    state.lastSelectedId = null;
+    state.bulkDeleteConfirm = false;
+    state.bulkTagOpen = false;
+    syncBulkCardsInPlace();
+    renderBulkActionBar();
+  }
+
+  function selectAllVisible() {
+    state.items.forEach((it) => state.selectedIds.add(Number(it.id)));
+    state.bulkDeleteConfirm = false;
+    syncBulkCardsInPlace();
+    renderBulkActionBar();
+    haptic("light");
+  }
+
+  function toggleBulkSelect(itemId, { shiftKey = false } = {}) {
+    const numId = Number(itemId);
+    if (!numId) return;
+    if (shiftKey && state.lastSelectedId !== null && state.lastSelectedId !== numId) {
+      const idxA = state.items.findIndex((i) => Number(i.id) === Number(state.lastSelectedId));
+      const idxB = state.items.findIndex((i) => Number(i.id) === numId);
+      if (idxA !== -1 && idxB !== -1) {
+        const start = Math.min(idxA, idxB);
+        const end = Math.max(idxA, idxB);
+        for (let i = start; i <= end; i++) {
+          state.selectedIds.add(Number(state.items[i].id));
+        }
+      } else {
+        state.selectedIds.add(numId);
+      }
+    } else if (state.selectedIds.has(numId)) {
+      state.selectedIds.delete(numId);
+    } else {
+      state.selectedIds.add(numId);
+    }
+    state.lastSelectedId = numId;
+    state.bulkDeleteConfirm = false;
+    if (state.selectedIds.size === 0) state.bulkTagOpen = false;
+    syncBulkCardsInPlace();
+    renderBulkActionBar();
+    haptic("selection");
+  }
+
+  async function runBulkAction(payload) {
+    const ids = [...state.selectedIds];
+    if (!ids.length) return false;
+    try {
+      const res = await fetch("/api/items/bulk", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ item_ids: ids, ...payload }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+        return false;
+      }
+      if (!res.ok) return false;
+      clearCatalogCache();
+      clearBulkSelection();
+      haptic("medium");
+      await loadItems();
+      if (payload.add_tag !== undefined || payload.delete) {
+        loadTags();
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function renderCatalog(opts = {}) {
     const { skipDrawer = false } = opts;
     openSwipeWrap = null;
     state.focusedIndex = -1;
+    const visibleIds = new Set(state.items.map((i) => Number(i.id)));
+    for (const sid of [...state.selectedIds]) {
+      if (!visibleIds.has(sid)) state.selectedIds.delete(sid);
+    }
+
     const container = document.getElementById("catalogContainer");
     const grid = document.getElementById("catalogGrid");
     const empty = document.getElementById("emptyState");
@@ -2827,6 +3059,7 @@
       if (container) container.classList.remove("kanban-wide");
       grid.className = "catalog-list";
       grid.innerHTML = "";
+      renderBulkActionBar();
       renderEmptyState();
       return;
     }
@@ -2852,6 +3085,11 @@
       grid.innerHTML = state.items.map(renderListRow).join("");
     }
 
+    if (state.selectedIds.size > 0) {
+      grid.classList.add("bulk-selecting");
+    }
+    renderBulkActionBar();
+
     applyMobileSingleLineTags();
 
     if (!skipDrawer && state.drawerItemId !== null) {
@@ -2866,6 +3104,7 @@
     if (container) container.classList.remove("kanban-wide");
     renderActiveSmartBanner();
     renderStatusPillsBar();
+    renderBulkActionBar();
 
     updateCountLabels(`Оригиналов: ${state.originals.length}`, state.originals.length);
 
@@ -2952,17 +3191,19 @@
 
   function syncNavigationState() {
     const isOriginals = state.view === "originals";
+    const isStats = state.view === "stats";
+    const isCatalog = !isOriginals && !isStats;
 
     document.querySelectorAll("#sidebarViewSwitch .nav-btn, #mobileBottomBar [data-view]").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.view === state.view);
     });
 
     document.querySelectorAll("#sidebarCategoryTabs .nav-btn, #mobileCategoryTabs .tab").forEach((btn) => {
-      btn.classList.toggle("active", (btn.dataset.tab || "") === state.tab);
+      btn.classList.toggle("active", !isStats && (btn.dataset.tab || "") === state.tab);
     });
 
     document.querySelectorAll("#sidebarSmartViews .nav-btn[data-smart]").forEach((btn) => {
-      btn.classList.toggle("active", !isOriginals && btn.dataset.smart === state.smart);
+      btn.classList.toggle("active", isCatalog && btn.dataset.smart === state.smart);
     });
 
     document.querySelectorAll("#viewModeSwitchDesktop .mode-btn").forEach((btn) => {
@@ -2983,22 +3224,27 @@
     if (mobModeBtn) {
       mobModeBtn.title = modeMeta.title;
       mobModeBtn.setAttribute("aria-label", modeMeta.title);
-      mobModeBtn.classList.toggle("hidden", isOriginals);
+      mobModeBtn.classList.toggle("hidden", !isCatalog);
     }
 
-    document.getElementById("desktopCatalogControls").classList.toggle("hidden", isOriginals);
+    const controlsRowEl = document.querySelector(".controls-row");
+    if (controlsRowEl) controlsRowEl.classList.toggle("hidden", isStats);
+    const mobCatTabsEl = document.getElementById("mobileCategoryTabs");
+    if (mobCatTabsEl) mobCatTabsEl.classList.toggle("hidden", isStats);
+
+    document.getElementById("desktopCatalogControls").classList.toggle("hidden", !isCatalog);
     const mobSortWrap = document.getElementById("mobileSortWrap");
-    if (mobSortWrap) mobSortWrap.classList.toggle("hidden", isOriginals);
+    if (mobSortWrap) mobSortWrap.classList.toggle("hidden", !isCatalog);
     const mobSortSelect = document.getElementById("mobileSortSelect");
     if (mobSortSelect) mobSortSelect.value = state.sort;
-    document.getElementById("tagBar").classList.toggle("hidden", isOriginals);
+    document.getElementById("tagBar").classList.toggle("hidden", !isCatalog);
 
     document.getElementById("searchInput").placeholder = isOriginals
       ? "Простой поиск по оригиналам..."
       : "Поиск по названию, автору, описанию...";
 
     const hasActiveFilter =
-      !isOriginals &&
+      isCatalog &&
       (state.status !== "all" ||
         state.sort !== "created" ||
         state.tags.length > 0 ||
@@ -3006,6 +3252,251 @@
         Boolean(state.smart));
     const filterDot = document.getElementById("mobileFilterDot");
     if (filterDot) filterDot.classList.toggle("hidden", !hasActiveFilter);
+  }
+
+  function formatStatsMonthLabel(ym, full = false) {
+    const MONTHS_SHORT = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"];
+    const MONTHS_FULL = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+    const m = String(ym || "").match(/^(\d{4})-(\d{2})$/);
+    if (!m) return ym || "Без даты";
+    const yr = m[1];
+    const mIdx = Math.max(0, Math.min(11, Number(m[2]) - 1));
+    return full ? `${MONTHS_FULL[mIdx]} ${yr}` : MONTHS_SHORT[mIdx];
+  }
+
+  function renderStats() {
+    const container = document.getElementById("catalogContainer");
+    const grid = document.getElementById("catalogGrid");
+    const empty = document.getElementById("emptyState");
+    if (!grid) return;
+    if (container) container.classList.remove("kanban-wide");
+    if (empty) empty.classList.add("hidden");
+    renderActiveSmartBanner();
+    renderStatusPillsBar();
+    renderBulkActionBar();
+
+    const data = state.statsData;
+    if (!data || !data.summary) return;
+    const s = data.summary;
+    const years = Array.isArray(data.available_years) ? data.available_years : [];
+    const pctDone = s.total > 0 ? Math.round((s.done / s.total) * 100) : 0;
+    updateCountLabels(`Итоги · ${s.total} зап.`, s.total);
+
+    const yearPillsHtml = [
+      `<button type="button" class="stats-year-pill ${!state.statsYear ? "active" : ""}" data-stats-year="">Всё время</button>`,
+      ...years.map(
+        (yr) =>
+          `<button type="button" class="stats-year-pill ${String(state.statsYear) === String(yr) ? "active" : ""}" data-stats-year="${yr}">${yr}</button>`
+      ),
+    ].join("");
+
+    const dist = Array.isArray(data.ratings_distribution) ? data.ratings_distribution : [];
+    const maxHist = Math.max(1, ...dist.map((d) => Number(d.count || 0)));
+    const histHtml = dist
+      .map((d) => {
+        const cnt = Number(d.count || 0);
+        const hPct = cnt > 0 ? Math.max(8, Math.round((cnt / maxHist) * 100)) : 4;
+        const isHigh = Number(d.rating) >= 8 && cnt > 0;
+        return `
+          <div class="stats-hist-col" title="Оценка ${d.rating}: ${cnt}">
+            <span class="stats-hist-cnt">${cnt || ""}</span>
+            <div class="stats-hist-bar ${isHigh ? "high" : ""}" style="height:${hPct}%"></div>
+            <span class="stats-hist-lbl">${d.rating}</span>
+          </div>
+        `;
+      })
+      .join("");
+
+    const monthly = Array.isArray(data.monthly) ? data.monthly : [];
+    const maxMonth = Math.max(
+      1,
+      ...monthly.map((m) => Math.max(Number(m.added || 0), Number(m.done || 0)))
+    );
+    const monthlyHtml = monthly.length
+      ? monthly
+          .map((m) => {
+            const added = Number(m.added || 0);
+            const done = Number(m.done || 0);
+            const addedPct = added > 0 ? Math.max(8, Math.round((added / maxMonth) * 100)) : 4;
+            const donePct = done > 0 ? Math.max(8, Math.round((done / maxMonth) * 100)) : 0;
+            return `
+              <div class="stats-month-col" title="${escapeHtml(formatStatsMonthLabel(m.month, true))}: добавлено ${added}, готово ${done}">
+                <div class="stats-month-bars">
+                  <div class="stats-month-bar-added" style="height:${addedPct}%"></div>
+                  ${done > 0 ? `<div class="stats-month-bar-done" style="height:${donePct}%"></div>` : ""}
+                </div>
+                <span class="stats-month-lbl">${escapeHtml(formatStatsMonthLabel(m.month, false))}</span>
+              </div>
+            `;
+          })
+          .join("")
+      : `<div style="font-size:13px;color:var(--muted);">Пока недостаточно данных по месяцам.</div>`;
+
+    const cats = Array.isArray(data.by_category) ? data.by_category : [];
+    const maxCat = Math.max(1, ...cats.map((c) => Number(c.total || 0)));
+    const catsHtml = cats
+      .map((c) => {
+        const wPct = c.total > 0 ? Math.max(6, Math.round((c.total / maxCat) * 100)) : 0;
+        const avgStr = c.avg_rating != null ? ` · ★ ${c.avg_rating}` : "";
+        return `
+          <button type="button" class="stats-cat-row" data-stats-jump-tab="${escapeHtml(c.tab)}">
+            <div class="stats-cat-top">
+              <span class="stats-cat-name">${escapeHtml(c.label)}</span>
+              <span class="stats-cat-meta">${c.done}/${c.total} готово${avgStr}</span>
+            </div>
+            <div class="stats-cat-track"><div class="stats-cat-fill" style="width:${wPct}%"></div></div>
+          </button>
+        `;
+      })
+      .join("");
+
+    const topTags = Array.isArray(data.top_tags) ? data.top_tags : [];
+    const maxTag = Math.max(1, ...topTags.map((t) => Number(t.count || 0)));
+    const tagsHtml = topTags.length
+      ? topTags
+          .map((t) => {
+            const wPct = Math.max(8, Math.round((t.count / maxTag) * 100));
+            return `
+              <button type="button" class="stats-tag-row" data-stats-jump-tag="${escapeHtml(t.tag)}">
+                <div class="stats-cat-top">
+                  <span class="stats-cat-name">#${escapeHtml(t.tag)}</span>
+                  <span class="stats-cat-meta">${t.count}</span>
+                </div>
+                <div class="stats-cat-track"><div class="stats-cat-fill" style="width:${wPct}%"></div></div>
+              </button>
+            `;
+          })
+          .join("")
+      : `<div style="font-size:13px;color:var(--muted);">Тегов пока нет.</div>`;
+
+    const diary = Array.isArray(data.diary) ? data.diary : [];
+    let lastDiaryMonth = "";
+    const diaryHtml = diary.length
+      ? diary
+          .map((d) => {
+            const mKey = String(d.activity_date || "").slice(0, 7);
+            const hdr =
+              mKey && mKey !== lastDiaryMonth
+                ? `<div class="stats-diary-month">${escapeHtml(formatStatsMonthLabel(mKey, true))}</div>`
+                : "";
+            lastDiaryMonth = mKey;
+            const thumb = d.poster_url
+              ? `<img src="${escapeHtml(d.poster_url)}" alt="" loading="lazy" />`
+              : `<span>${CATEGORY_EMOJI[d.category] || "📌"}</span>`;
+            const stLbl = (STATUS_META[d.status] || STATUS_META.done).label;
+            const subParts = [stLbl, d.creator ? d.creator : "", String(d.activity_date || "").slice(0, 10)].filter(Boolean);
+            const rateHtml = d.user_rating
+              ? `<span class="stats-diary-rating">★ ${Number(d.user_rating)}</span>`
+              : "";
+            return `
+              ${hdr}
+              <button type="button" class="stats-diary-row" data-stats-open-id="${d.id}">
+                <div class="stats-diary-poster">${thumb}</div>
+                <div class="stats-diary-info">
+                  <div class="stats-diary-title">${escapeHtml(d.title_ru || "Без названия")}${d.release_year ? ` (${d.release_year})` : ""}</div>
+                  <div class="stats-diary-sub">${escapeHtml(subParts.join(" · "))}</div>
+                </div>
+                ${rateHtml}
+              </button>
+            `;
+          })
+          .join("")
+      : `<div style="font-size:13px;color:var(--muted);">Здесь появятся завершённые и оценённые вами записи.</div>`;
+
+    grid.className = "stats-dashboard";
+    grid.innerHTML = `
+      <div class="stats-header">
+        <div>
+          <h2 class="stats-heading">Итоги и дневник</h2>
+          <div class="stats-subtitle">${state.statsYear ? `Статистика за ${state.statsYear} год` : "Сводка по всей личной базе"}</div>
+        </div>
+        <div class="stats-year-pills">${yearPillsHtml}</div>
+      </div>
+
+      <div class="stats-kpi-grid">
+        <button type="button" class="stats-kpi-card" data-stats-jump-status="all">
+          <span class="stats-kpi-label">Всего записей</span>
+          <span class="stats-kpi-val">${s.total}</span>
+          <span class="stats-kpi-sub">Планы: ${s.planned} · В процессе: ${s.in_progress}</span>
+        </button>
+        <button type="button" class="stats-kpi-card" data-stats-jump-status="done">
+          <span class="stats-kpi-label">Завершено</span>
+          <span class="stats-kpi-val">${s.done}</span>
+          <span class="stats-kpi-sub">${pctDone}% от выбранного периода</span>
+        </button>
+        <button type="button" class="stats-kpi-card" data-stats-jump-smart="favorites">
+          <span class="stats-kpi-label">Средняя оценка</span>
+          <span class="stats-kpi-val">${s.avg_user_rating != null ? `★ ${s.avg_user_rating}` : "—"}</span>
+          <span class="stats-kpi-sub">Оценено записей: ${s.rated_count}</span>
+        </button>
+        <button type="button" class="stats-kpi-card" data-stats-jump-smart="noted">
+          <span class="stats-kpi-label">С личными заметками</span>
+          <span class="stats-kpi-val">${s.noted_count}</span>
+          <span class="stats-kpi-sub">Во входящих: ${s.inbox}</span>
+        </button>
+      </div>
+
+      <div class="stats-bento-grid">
+        <section class="stats-card">
+          <div class="stats-card-title">Распределение оценок (1–10)</div>
+          <div class="stats-histogram">${histHtml}</div>
+        </section>
+        <section class="stats-card">
+          <div class="stats-card-title">Активность по месяцам</div>
+          <div class="stats-monthly-chart">${monthlyHtml}</div>
+        </section>
+      </div>
+
+      <div class="stats-bento-grid">
+        <section class="stats-card">
+          <div class="stats-card-title">По категориям</div>
+          <div class="stats-cat-list">${catsHtml}</div>
+        </section>
+        <section class="stats-card">
+          <div class="stats-card-title">Топ тегов и жанров</div>
+          <div class="stats-tags-grid">${tagsHtml}</div>
+        </section>
+      </div>
+
+      <section class="stats-diary-section">
+        <div class="stats-card-title">Дневник просмотренного и оценённого</div>
+        ${diaryHtml}
+      </section>
+    `;
+  }
+
+  async function loadStats() {
+    if (statsAbort) statsAbort.abort();
+    statsAbort = new AbortController();
+    const { signal } = statsAbort;
+
+    if (!state.statsData) {
+      renderSkeletonRows(4);
+    }
+
+    const params = new URLSearchParams();
+    if (state.statsYear) params.set("year", String(state.statsYear));
+    const qs = params.toString();
+
+    try {
+      const res = await fetch(`/api/stats${qs ? `?${qs}` : ""}`, { headers: authHeaders(), signal });
+      if (signal.aborted) return;
+      if (res.status === 401 || res.status === 403) {
+        if (res.status === 401) localStorage.removeItem("sb_access_key");
+        if (authErrorMsg && getAccessKey()) authErrorMsg.classList.remove("hidden");
+        showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+        return;
+      }
+      if (!res.ok) return;
+      hideAuthModal();
+      const data = await res.json();
+      if (signal.aborted) return;
+      state.statsData = data;
+      renderStats();
+    } catch (err) {
+      if (err && err.name === "AbortError") return;
+      throw err;
+    }
   }
 
   async function loadOriginals() {
@@ -3174,9 +3665,14 @@
     closeRatingPopover();
     closeOpenSwipeRow();
     showMobileTopbar();
+    if (state.view !== "catalog") {
+      clearBulkSelection();
+    }
     syncNavigationState();
     if (state.view === "originals") {
       loadOriginals();
+    } else if (state.view === "stats") {
+      loadStats();
     } else {
       tryHydrateFromCache();
       loadTags();
@@ -3515,6 +4011,11 @@
       return;
     }
     if (e.target.closest("#bottomSearchBtn")) {
+      if (state.view === "stats") {
+        state.view = "catalog";
+        syncStateToUrl({ push: true });
+        refreshCurrentView();
+      }
       window.scrollTo({ top: 0, behavior: "smooth" });
       setTimeout(() => document.getElementById("searchInput").focus(), 180);
     }
@@ -3526,6 +4027,7 @@
     el.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-tab]");
       if (!btn) return;
+      state.view = "catalog";
       state.tab = btn.dataset.tab || "";
       state.tags = [];
       state.viewMode = getViewModeForTab(state.tab);
@@ -3715,11 +4217,12 @@
   const quickAddSubmitBtn = document.getElementById("quickAddSubmitBtn");
   let selectedAddTopic = "auto";
 
-  function openQuickAddModal() {
+  function openQuickAddModal(opts = {}) {
     closeStatusPopover();
     closeRatingPopover();
     closeOpenSwipeRow();
     closeFiltersSheet();
+    closeShortcutsModal();
     closeCmdPalette();
     state.quickAddOpen = true;
     const tabMap = { movies: "movies", books: "books", video: "video", article: "article", ideas: "ideas" };
@@ -3728,6 +4231,9 @@
       quickAddTopics.querySelectorAll("[data-add-topic]").forEach((btn) => {
         btn.classList.toggle("active", btn.dataset.addTopic === selectedAddTopic);
       });
+    }
+    if (opts && typeof opts.prefillText === "string" && quickAddInput) {
+      quickAddInput.value = opts.prefillText;
     }
     if (quickAddStatus) {
       quickAddStatus.textContent = "";
@@ -3755,8 +4261,8 @@
 
   const openAddDeskBtn = document.getElementById("openAddModalDesktop");
   const openAddMobBtn = document.getElementById("openAddModalMobile");
-  if (openAddDeskBtn) openAddDeskBtn.addEventListener("click", openQuickAddModal);
-  if (openAddMobBtn) openAddMobBtn.addEventListener("click", openQuickAddModal);
+  if (openAddDeskBtn) openAddDeskBtn.addEventListener("click", () => openQuickAddModal());
+  if (openAddMobBtn) openAddMobBtn.addEventListener("click", () => openQuickAddModal());
   if (document.getElementById("quickAddCloseBtn")) {
     document.getElementById("quickAddCloseBtn").addEventListener("click", closeQuickAddModal);
   }
@@ -3898,12 +4404,62 @@
       { id: "act-add", group: "Действия", label: "➕ Добавить запись", sub: "Клавиша N", run: () => openQuickAddModal() },
       { id: "act-triage", group: "Действия", label: "⚡ Разобрать входящие", sub: "Клавиша T", run: () => startInboxTriage() },
       { id: "act-lucky", group: "Действия", label: "🎲 Мне повезёт", sub: "Клавиша L", run: () => pickRandomItem() },
+      {
+        id: "act-bulk",
+        group: "Действия",
+        label: state.selectedIds.size > 0 ? "☑ Снять мультивыбор" : "☑ Мультивыбор записей",
+        sub: "Клавиша X",
+        run: () => {
+          if (state.selectedIds.size > 0) {
+            clearBulkSelection();
+            return;
+          }
+          if (state.view !== "catalog") {
+            state.view = "catalog";
+            syncStateToUrl({ push: true });
+            refreshCurrentView();
+          }
+          if (state.items.length > 0) {
+            toggleBulkSelect(state.items[0].id);
+          }
+        },
+      },
       { id: "act-shortcuts", group: "Действия", label: "⌨️ Горячие клавиши", sub: "Клавиша ?", run: () => openShortcutsModal() },
+      {
+        id: "act-stats",
+        group: "Разделы",
+        label: "📊 Открыть Итоги и дневник",
+        sub: "",
+        run: () => {
+          state.view = "stats";
+          syncStateToUrl({ push: true });
+          refreshCurrentView();
+        },
+      },
       { id: "act-list", group: "Вид", label: "☰ Вид: Список", sub: "", run: () => setViewMode("list") },
       { id: "act-posters", group: "Вид", label: "🖼 Вид: Постеры", sub: "", run: () => setViewMode("posters") },
       { id: "act-cards", group: "Вид", label: "⊞ Вид: Карточки", sub: "", run: () => setViewMode("cards") },
       { id: "act-kanban", group: "Вид", label: "▥ Вид: Канбан", sub: "", run: () => setViewMode("kanban") },
       { id: "act-theme", group: "Настройки", label: "🌗 Сменить тему (Бумага / Чернила)", sub: "", run: () => cycleThemeMode() },
+      ...(deferredInstallPrompt
+        ? [
+            {
+              id: "act-install-pwa",
+              group: "Настройки",
+              label: "📲 Установить приложение (PWA)",
+              sub: "",
+              run: async () => {
+                if (!deferredInstallPrompt) return;
+                const promptEvt = deferredInstallPrompt;
+                deferredInstallPrompt = null;
+                try {
+                  promptEvt.prompt();
+                  await promptEvt.userChoice;
+                } catch {}
+              },
+            },
+          ]
+        : []),
       {
         id: "act-cat-all",
         group: "Категории",
@@ -4197,6 +4753,7 @@
       "touchstart",
       (e) => {
         if (window.innerWidth > 820 || state.view !== "catalog" || state.viewMode !== "list") return;
+        if (state.selectedIds.size > 0) return;
         if (e.touches.length !== 1) return;
         if (e.target.closest(".swipe-tray")) return;
         const x = e.touches[0].clientX;
@@ -4389,8 +4946,197 @@
     catalogGridEl.addEventListener("touchcancel", endSwipe, { passive: true });
   })();
 
+  (function bindMobileLongPressSelect() {
+    let lpTimer = null;
+    let lpStartX = 0;
+    let lpStartY = 0;
+
+    function cancelLongPress() {
+      if (lpTimer) {
+        clearTimeout(lpTimer);
+        lpTimer = null;
+      }
+    }
+
+    catalogGridEl.addEventListener(
+      "touchstart",
+      (e) => {
+        cancelLongPress();
+        if (window.innerWidth > 820 || state.view !== "catalog" || e.touches.length !== 1) return;
+        if (e.target.closest("a, button, select, option, .swipe-tray, .list-tags")) return;
+        const card = e.target.closest(
+          ".list-row[data-open-id], .item-card[data-open-id], .poster-card[data-open-id], .kanban-card[data-open-id]"
+        );
+        if (!card) return;
+        const targetId = Number(card.dataset.openId);
+        if (!targetId) return;
+        lpStartX = e.touches[0].clientX;
+        lpStartY = e.touches[0].clientY;
+        lpTimer = setTimeout(() => {
+          lpTimer = null;
+          closeOpenSwipeRow();
+          toggleBulkSelect(targetId);
+          haptic("medium");
+          suppressSwipeClickUntil = Date.now() + 380;
+        }, 450);
+      },
+      { passive: true }
+    );
+
+    catalogGridEl.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!lpTimer || e.touches.length !== 1) return;
+        const dx = e.touches[0].clientX - lpStartX;
+        const dy = e.touches[0].clientY - lpStartY;
+        if (Math.hypot(dx, dy) > 10) cancelLongPress();
+      },
+      { passive: true }
+    );
+    catalogGridEl.addEventListener("touchend", cancelLongPress, { passive: true });
+    catalogGridEl.addEventListener("touchcancel", cancelLongPress, { passive: true });
+  })();
+
+  const bulkSelectAllBtnEl = document.getElementById("bulkSelectAllBtn");
+  const bulkStatusSelectEl = document.getElementById("bulkStatusSelect");
+  const bulkTagBtnEl = document.getElementById("bulkTagBtn");
+  const bulkTagInputEl = document.getElementById("bulkTagInput");
+  const bulkTagApplyBtnEl = document.getElementById("bulkTagApplyBtn");
+  const bulkDeleteBtnEl = document.getElementById("bulkDeleteBtn");
+  const bulkClearBtnEl = document.getElementById("bulkClearBtn");
+
+  if (bulkSelectAllBtnEl) {
+    bulkSelectAllBtnEl.addEventListener("click", () => {
+      if (state.selectedIds.size >= state.items.length && state.items.length > 0) {
+        clearBulkSelection();
+      } else {
+        selectAllVisible();
+      }
+    });
+  }
+  if (bulkStatusSelectEl) {
+    bulkStatusSelectEl.addEventListener("change", async (e) => {
+      const nextSt = e.target.value;
+      if (!nextSt) return;
+      await runBulkAction({ status: nextSt });
+      e.target.value = "";
+    });
+  }
+  if (bulkTagBtnEl) {
+    bulkTagBtnEl.addEventListener("click", () => {
+      state.bulkTagOpen = !state.bulkTagOpen;
+      state.bulkDeleteConfirm = false;
+      renderBulkActionBar();
+      if (state.bulkTagOpen && bulkTagInputEl) {
+        setTimeout(() => bulkTagInputEl.focus(), 20);
+      }
+    });
+  }
+  async function submitBulkTag() {
+    if (!bulkTagInputEl) return;
+    const raw = bulkTagInputEl.value.trim();
+    if (!raw) return;
+    const ok = await runBulkAction({ add_tag: raw });
+    if (ok) bulkTagInputEl.value = "";
+  }
+  if (bulkTagApplyBtnEl) {
+    bulkTagApplyBtnEl.addEventListener("click", submitBulkTag);
+  }
+  if (bulkTagInputEl) {
+    bulkTagInputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        submitBulkTag();
+      }
+    });
+  }
+  if (bulkDeleteBtnEl) {
+    bulkDeleteBtnEl.addEventListener("click", async () => {
+      if (!state.bulkDeleteConfirm) {
+        state.bulkDeleteConfirm = true;
+        renderBulkActionBar();
+        haptic("light");
+        return;
+      }
+      await runBulkAction({ delete: true });
+    });
+  }
+  if (bulkClearBtnEl) {
+    bulkClearBtnEl.addEventListener("click", clearBulkSelection);
+  }
+
   catalogGridEl.addEventListener("click", (e) => {
     if (Date.now() < suppressSwipeClickUntil) return;
+
+    if (state.view === "stats") {
+      const yrBtn = e.target.closest("[data-stats-year]");
+      if (yrBtn) {
+        state.statsYear = yrBtn.dataset.statsYear || "";
+        syncStateToUrl({ push: true });
+        loadStats();
+        haptic("selection");
+        return;
+      }
+      const tabJump = e.target.closest("[data-stats-jump-tab]");
+      if (tabJump) {
+        state.view = "catalog";
+        state.tab = tabJump.dataset.statsJumpTab || "";
+        state.smart = "";
+        state.status = "all";
+        state.tags = [];
+        state.viewMode = getViewModeForTab(state.tab);
+        syncStateToUrl({ push: true });
+        refreshCurrentView();
+        haptic("selection");
+        return;
+      }
+      const stJump = e.target.closest("[data-stats-jump-status]");
+      if (stJump) {
+        state.view = "catalog";
+        state.tab = "";
+        state.smart = "";
+        state.status = stJump.dataset.statsJumpStatus || "all";
+        state.tags = [];
+        syncStateToUrl({ push: true });
+        refreshCurrentView();
+        haptic("selection");
+        return;
+      }
+      const smartJump = e.target.closest("[data-stats-jump-smart]");
+      if (smartJump) {
+        state.view = "catalog";
+        state.tab = "";
+        state.status = "all";
+        state.tags = [];
+        state.smart = smartJump.dataset.statsJumpSmart || "";
+        syncStateToUrl({ push: true });
+        refreshCurrentView();
+        haptic("selection");
+        return;
+      }
+      const tagJump = e.target.closest("[data-stats-jump-tag]");
+      if (tagJump) {
+        state.view = "catalog";
+        state.tab = "";
+        state.smart = "";
+        state.status = "all";
+        state.tags = [];
+        toggleTagFilter(tagJump.dataset.statsJumpTag || "");
+        return;
+      }
+      const openStatsItem = e.target.closest("[data-stats-open-id]");
+      if (openStatsItem) {
+        openItemById(openStatsItem.dataset.statsOpenId);
+        return;
+      }
+    }
+
+    const bulkCb = e.target.closest("[data-bulk-toggle]");
+    if (bulkCb) {
+      e.stopPropagation();
+      toggleBulkSelect(bulkCb.dataset.bulkToggle, { shiftKey: e.shiftKey });
+      return;
+    }
 
     const swipeStatusBtn = e.target.closest("[data-swipe-status]");
     if (swipeStatusBtn && swipeStatusBtn.dataset.id) {
@@ -4485,6 +5231,10 @@
 
     const card = e.target.closest("[data-open-id]");
     if (card) {
+      if (state.selectedIds.size > 0) {
+        toggleBulkSelect(card.dataset.openId, { shiftKey: e.shiftKey });
+        return;
+      }
       openDetailDrawer(card.dataset.openId);
     }
   });
@@ -4596,14 +5346,42 @@
   }
 
   document.addEventListener("keydown", async (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    const keyLower = (e.key || "").toLowerCase();
+    if ((e.metaKey || e.ctrlKey) && keyLower === "k") {
       e.preventDefault();
       if (state.cmdPaletteOpen) closeCmdPalette();
       else openCmdPalette();
       return;
     }
 
+    const activeEl = document.activeElement;
+    const activeTag = (activeEl && activeEl.tagName ? activeEl.tagName : "").toLowerCase();
+    const isTyping =
+      activeTag === "input" ||
+      activeTag === "textarea" ||
+      activeTag === "select" ||
+      Boolean(activeEl && activeEl.isContentEditable);
+
+    if ((e.metaKey || e.ctrlKey) && keyLower === "a" && !isTyping && state.view === "catalog" && state.selectedIds.size > 0) {
+      e.preventDefault();
+      selectAllVisible();
+      return;
+    }
+
     if (e.key === "Escape") {
+      const lightboxOpen = posterLightbox && !posterLightbox.classList.contains("hidden");
+      if (
+        state.selectedIds.size > 0 &&
+        !lightboxOpen &&
+        state.drawerItemId === null &&
+        !state.cmdPaletteOpen &&
+        !state.quickAddOpen &&
+        !state.shortcutsOpen &&
+        !state.filtersSheetOpen
+      ) {
+        clearBulkSelection();
+        return;
+      }
       closeStatusPopover();
       closeRatingPopover();
       closeOpenSwipeRow();
@@ -4617,18 +5395,9 @@
       return;
     }
 
-    const activeEl = document.activeElement;
-    const activeTag = (activeEl && activeEl.tagName ? activeEl.tagName : "").toLowerCase();
-    const isTyping =
-      activeTag === "input" ||
-      activeTag === "textarea" ||
-      activeTag === "select" ||
-      Boolean(activeEl && activeEl.isContentEditable);
-
     if (isTyping || e.isComposing) return;
 
     const noMod = !e.ctrlKey && !e.metaKey && !e.altKey;
-    const keyLower = (e.key || "").toLowerCase();
 
     if (e.key === "?" && noMod) {
       e.preventDefault();
@@ -4726,6 +5495,16 @@
         if (keyLower === "k" || e.code === "KeyK" || e.key === "ArrowUp") {
           e.preventDefault();
           moveListFocus(-1);
+          return;
+        }
+        if (keyLower === "x" || e.code === "KeyX") {
+          e.preventDefault();
+          const focused = state.focusedIndex >= 0 && catalogGridEl ? catalogGridEl.querySelector(".kb-focused[data-open-id]") : null;
+          if (focused) {
+            toggleBulkSelect(focused.dataset.openId, { shiftKey: e.shiftKey });
+          } else if (state.items.length > 0) {
+            toggleBulkSelect(state.items[0].id);
+          }
           return;
         }
         if (e.key === "Enter" && state.focusedIndex >= 0 && catalogGridEl) {

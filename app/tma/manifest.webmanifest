@@ -1,0 +1,39 @@
+{
+  "name": "Notes — Личная база и медиа-каталог",
+  "short_name": "Notes",
+  "description": "Персональная библиотека фильмов, книг, видео, статей и заметок",
+  "start_url": "/tma/",
+  "scope": "/tma/",
+  "display": "standalone",
+  "background_color": "#fbf8f3",
+  "theme_color": "#c2410c",
+  "lang": "ru",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "share_target": {
+    "action": "/tma/",
+    "method": "GET",
+    "params": {
+      "title": "share_title",
+      "text": "share_text",
+      "url": "share_url"
+    }
+  }
+}

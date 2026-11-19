@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hmac
+import mimetypes
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,6 +27,7 @@ from app.utils.initdata import verify_telegram_init_data
 
 TMA_DIR = Path(__file__).resolve().parent / "tma"
 DEFAULT_PUBLIC_URL = "https://second-brain-bot-4wcq.onrender.com"
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 
 async def _keep_alive_loop() -> None:
@@ -143,6 +145,13 @@ class CreateItemPayload(BaseModel):
     topic: str = "auto"
 
 
+class BulkItemsPayload(BaseModel):
+    item_ids: list[int]
+    status: str | None = None
+    add_tag: str | None = None
+    delete: bool = False
+
+
 @app.post("/api/login")
 def api_login(
     payload: LoginPayload,
@@ -235,6 +244,39 @@ def api_list_tags(
     conn = get_connection()
     try:
         return {"tags": repo.list_tags_catalog(conn, tab=tab)}
+    finally:
+        conn.close()
+
+
+@app.get("/api/stats")
+def api_get_stats(
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    _user: dict[str, Any] = Depends(require_tma_auth),
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        return repo.get_catalog_stats(conn, year=year)
+    finally:
+        conn.close()
+
+
+@app.post("/api/items/bulk")
+def api_bulk_items(
+    payload: BulkItemsPayload,
+    _user: dict[str, Any] = Depends(require_tma_auth),
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        try:
+            return repo.bulk_update_items(
+                conn,
+                payload.item_ids,
+                status=payload.status,
+                add_tag=payload.add_tag,
+                delete=payload.delete,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
         conn.close()
 

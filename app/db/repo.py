@@ -6,6 +6,8 @@ from typing import Any
 
 from app.utils.normalize import normalize_text
 
+VALID_STATUSES = ("inbox", "planned", "in_progress", "done", "dropped")
+
 ITEM_COLUMNS = (
     "id",
     "category",
@@ -906,4 +908,251 @@ def delete_original_message(conn: Any, orig_id: int) -> dict[str, Any] | None:
         "id": orig_id,
         "tg_message_id": orig_tg_msg_id,
         "deleted_items": deleted_items,
+    }
+
+
+def bulk_update_items(
+    conn: Any,
+    item_ids: list[int],
+    *,
+    status: str | None = None,
+    add_tag: str | None = None,
+    delete: bool = False,
+) -> dict[str, Any]:
+    """Массовое изменение статуса, добавление тега или удаление до 200 записей за один запрос."""
+    normalized: set[int] = set()
+    for raw in item_ids or []:
+        try:
+            val = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if val > 0:
+            normalized.add(val)
+    ids = sorted(normalized)[:200]
+    if not ids:
+        return {"action": "noop", "affected": 0, "ids": []}
+
+    placeholders = ", ".join("?" for _ in ids)
+
+    if delete:
+        conn.execute(f"DELETE FROM items_fts WHERE rowid IN ({placeholders})", ids)
+        conn.execute(f"DELETE FROM item_tags WHERE item_id IN ({placeholders})", ids)
+        conn.execute(f"DELETE FROM item_sources WHERE item_id IN ({placeholders})", ids)
+        cur = conn.execute(f"DELETE FROM items WHERE id IN ({placeholders})", ids)
+        conn.commit()
+        return {"action": "delete", "affected": int(cur.rowcount or 0), "ids": ids}
+
+    if status is not None:
+        if status not in VALID_STATUSES:
+            raise ValueError(f"Invalid status: {status}")
+        cur = conn.execute(
+            f"UPDATE items SET status = ? WHERE id IN ({placeholders})",
+            (status, *ids),
+        )
+        conn.commit()
+        return {"action": "status", "status": status, "affected": int(cur.rowcount or 0), "ids": ids}
+
+    if add_tag is not None:
+        clean_tag = str(add_tag).strip().lstrip("#").lower()
+        if not clean_tag:
+            raise ValueError("Empty tag")
+        valid_rows = conn.execute(f"SELECT id FROM items WHERE id IN ({placeholders})", ids).fetchall()
+        valid_ids = [int(r[0]) for r in valid_rows]
+        for iid in valid_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO item_tags (item_id, kind, tag) VALUES (?, 'tag', ?)",
+                (iid, clean_tag),
+            )
+        conn.commit()
+        for iid in valid_ids:
+            sync_item_fts(conn, iid)
+        return {"action": "add_tag", "tag": clean_tag, "affected": len(valid_ids), "ids": valid_ids}
+
+    raise ValueError("No bulk action specified")
+
+
+def get_catalog_stats(conn: Any, *, year: int | None = None) -> dict[str, Any]:
+    """Возвращает агрегированную статистику, гистограмму оценок, активность по месяцам и дневник."""
+    years_cur = conn.execute(
+        "SELECT DISTINCT substr(created_at, 1, 4) FROM items "
+        "WHERE created_at IS NOT NULL AND length(created_at) >= 4 ORDER BY 1 DESC"
+    )
+    available_years = sorted(
+        {int(r[0]) for r in years_cur.fetchall() if r[0] and str(r[0]).isdigit()},
+        reverse=True,
+    )
+
+    year_str = str(year) if year is not None else None
+    where_created = "WHERE substr(created_at, 1, 4) = ?" if year_str else ""
+    params: list[Any] = [year_str] if year_str else []
+
+    row_sum = conn.execute(
+        f"""
+        SELECT
+            COUNT(*),
+            COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN status = 'planned' THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN status = 'inbox' THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN status = 'dropped' THEN 1 ELSE 0 END), 0),
+            COUNT(user_rating),
+            ROUND(AVG(user_rating), 2),
+            COALESCE(SUM(CASE WHEN meta LIKE '%"user_note"%' THEN 1 ELSE 0 END), 0)
+        FROM items
+        {where_created}
+        """,
+        params,
+    ).fetchone()
+
+    summary = {
+        "total": int(row_sum[0] or 0),
+        "done": int(row_sum[1] or 0),
+        "in_progress": int(row_sum[2] or 0),
+        "planned": int(row_sum[3] or 0),
+        "inbox": int(row_sum[4] or 0),
+        "dropped": int(row_sum[5] or 0),
+        "rated_count": int(row_sum[6] or 0),
+        "avg_user_rating": float(row_sum[7]) if row_sum[7] is not None else None,
+        "noted_count": int(row_sum[8] or 0),
+    }
+
+    cat_rows = conn.execute(
+        f"""
+        SELECT
+            category,
+            COUNT(*),
+            COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(user_rating), 0),
+            COUNT(user_rating)
+        FROM items
+        {where_created}
+        GROUP BY category
+        """,
+        params,
+    ).fetchall()
+    cat_agg: dict[str, tuple[int, int, float, int]] = {
+        str(r[0]): (int(r[1] or 0), int(r[2] or 0), float(r[3] or 0.0), int(r[4] or 0))
+        for r in cat_rows
+        if r[0]
+    }
+    buckets = (
+        ("movies", "Кино и сериалы", ("movie", "series")),
+        ("books", "Книги", ("book",)),
+        ("video", "YouTube", ("video",)),
+        ("article", "Статьи", ("article",)),
+        ("ideas", "Идеи и посты", ("idea", "post")),
+    )
+    by_category: list[dict[str, Any]] = []
+    for tab_key, label, cats in buckets:
+        tot = sum(cat_agg.get(c, (0, 0, 0.0, 0))[0] for c in cats)
+        dn = sum(cat_agg.get(c, (0, 0, 0.0, 0))[1] for c in cats)
+        r_sum = sum(cat_agg.get(c, (0, 0, 0.0, 0))[2] for c in cats)
+        r_cnt = sum(cat_agg.get(c, (0, 0, 0.0, 0))[3] for c in cats)
+        by_category.append(
+            {
+                "tab": tab_key,
+                "label": label,
+                "total": tot,
+                "done": dn,
+                "avg_rating": round(r_sum / r_cnt, 2) if r_cnt else None,
+            }
+        )
+
+    where_rated = "WHERE user_rating BETWEEN 1 AND 10" + (" AND substr(created_at, 1, 4) = ?" if year_str else "")
+    rating_rows = conn.execute(
+        f"SELECT user_rating, COUNT(*) FROM items {where_rated} GROUP BY user_rating",
+        params,
+    ).fetchall()
+    rating_map = {int(r[0]): int(r[1]) for r in rating_rows if r[0] is not None}
+    ratings_distribution = [{"rating": r, "count": rating_map.get(r, 0)} for r in range(1, 11)]
+
+    where_i_created = "WHERE substr(i.created_at, 1, 4) = ?" if year_str else ""
+    top_tags_rows = conn.execute(
+        f"""
+        SELECT t.tag, COUNT(*) AS cnt
+        FROM item_tags t
+        JOIN items i ON i.id = t.item_id
+        {where_i_created}
+        GROUP BY t.tag
+        ORDER BY cnt DESC, t.tag ASC
+        LIMIT 8
+        """,
+        params,
+    ).fetchall()
+    top_tags = [{"tag": str(r[0]), "count": int(r[1])} for r in top_tags_rows]
+
+    where_m = "WHERE created_at IS NOT NULL AND length(created_at) >= 7" + (
+        " AND substr(created_at, 1, 4) = ?" if year_str else ""
+    )
+    monthly_rows = conn.execute(
+        f"""
+        SELECT
+            substr(created_at, 1, 7) AS ym,
+            COUNT(*) AS added,
+            COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS done
+        FROM items
+        {where_m}
+        GROUP BY ym
+        ORDER BY ym ASC
+        """,
+        params,
+    ).fetchall()
+    monthly_map = {str(r[0]): {"added": int(r[1] or 0), "done": int(r[2] or 0)} for r in monthly_rows if r[0]}
+    if year is not None:
+        monthly = [
+            {
+                "month": f"{year}-{m:02d}",
+                "added": monthly_map.get(f"{year}-{m:02d}", {}).get("added", 0),
+                "done": monthly_map.get(f"{year}-{m:02d}", {}).get("done", 0),
+            }
+            for m in range(1, 13)
+        ]
+    else:
+        sorted_months = sorted(monthly_map.keys())[-12:]
+        monthly = [
+            {"month": ym, "added": monthly_map[ym]["added"], "done": monthly_map[ym]["done"]}
+            for ym in sorted_months
+        ]
+
+    where_diary = "WHERE (status = 'done' OR user_rating IS NOT NULL)" + (
+        " AND substr(COALESCE(updated_at, created_at), 1, 4) = ?" if year_str else ""
+    )
+    diary_rows = conn.execute(
+        f"""
+        SELECT
+            id, category, status, title_ru, release_year, creator, poster_url,
+            user_rating, rating_imdb, rating_kp, COALESCE(updated_at, created_at) AS activity_date
+        FROM items
+        {where_diary}
+        ORDER BY activity_date DESC, id DESC
+        LIMIT 30
+        """,
+        params,
+    ).fetchall()
+    diary = [
+        {
+            "id": int(r[0]),
+            "category": r[1],
+            "status": r[2],
+            "title_ru": r[3],
+            "release_year": r[4],
+            "creator": r[5],
+            "poster_url": r[6],
+            "user_rating": r[7],
+            "rating_imdb": r[8],
+            "rating_kp": r[9],
+            "activity_date": r[10],
+        }
+        for r in diary_rows
+    ]
+
+    return {
+        "year": year,
+        "available_years": available_years,
+        "summary": summary,
+        "by_category": by_category,
+        "ratings_distribution": ratings_distribution,
+        "top_tags": top_tags,
+        "monthly": monthly,
+        "diary": diary,
     }

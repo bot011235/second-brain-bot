@@ -43,6 +43,18 @@
 
 ## 3. Хронология изменений (Лог правок по всем чатам)
 
+### 2026-11-19 (v29) — Этап 4 UI/UX: Мультивыбор (Bulk Actions), редакционные «Итоги и дневник» (`/api/stats`) и PWA + Web Share Target (`app/db/repo.py`, `app/main.py`, `app/tma/`, `tests/test_stage6_tma.py`)
+- **Бэкенд массовых операций и статистики (`app/db/repo.py`, `app/main.py`)**:
+  - Добавлена функция `bulk_update_items` и эндпоинт `POST /api/items/bulk` (`BulkItemsPayload`) для смены статуса, добавления тега с пересборкой `items_fts` и массового удаления до 200 записей.
+  - Добавлена функция `get_catalog_stats` и эндпоинт `GET /api/stats?year=` с KPI-метриками, разбивкой по 5 категориям, гистограммой оценок `1–10`, активностью по месяцам, топ-8 тегов и хронологическим дневником завершённых/оценённых записей.
+  - Зарегистрирован MIME-тип `application/manifest+json` для `.webmanifest`.
+- **Мультивыбор и плавающая панель Bulk Actions (`app/tma/`)**:
+  - Во все 4 режима карточек (`list`, `cards`, `posters`, `kanban`) добавлены чекбоксы мультивыбора (hover на ПК, долгий тап `450ms` на мобильном, `X` / `Shift+клик` / `Ctrl+A` / `Esc`), плавающая панель `#bulkActionBar` со сменой статуса, добавлением тега и 2-шаговым удалением.
+- **Раздел «Итоги и дневник» (`?view=stats`)**:
+  - Добавлена вкладка «Итоги» в сайдбар и 5-кнопочную мобильную нижнюю панель с фильтром по годам, кликабельными KPI-карточками, гистограммой оценок, графиком по месяцам, прогресс-барами категорий/тегов и лентой дневника с открытием карточек.
+- **PWA и Web Share Target (`manifest.webmanifest`, `sw.js`, `icon.svg`, `icon-192.png`, `icon-512.png`)**:
+  - Настроены установка PWA на домашний экран (`manifest.webmanifest`, network-first `sw.js` только для `/tma/`, синхронизация `<meta name="theme-color">`, `beforeinstallprompt`) и системное меню «Поделиться» (`share_target` -> автоподстановка ссылки в шторку «Новая запись» после авторизации). Версия ассетов обновлена до `?v=29`.
+
 ### 2026-11-19 (v28) — Этап 3 UI/UX + Бэкенд-поиск: Inbox Triage, Keyboard-First UX, Умные списки, FTS5 + мульти-теги, URL-синк и Global Cmd+K (`app/db/repo.py`, `app/main.py`, `app/tma/`, `tests/test_stage6_tma.py`)
 - **Умный поиск и мульти-теги без SQL-миграций (`app/db/repo.py`, `app/main.py`)**:
   - В `sync_item_fts` и `update_item_fields` добавлена индексация личных заметок (`meta.user_note`) в `items_fts`.
