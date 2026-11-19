@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.bot.cards import render_card_html
-from app.bot.handlers import handle_update, ingest_web_item
+from app.bot.handlers import handle_update, ingest_web_item, reenrich_item
 from app.bot.keyboards import build_item_keyboard
 from app.bot.telegram_api import TelegramClient
 from app.config import settings
@@ -138,6 +138,8 @@ class PatchItemPayload(BaseModel):
     summary: str | None = None
     user_note: str | None = None
     tags: list[str] | None = None
+    highlights: list[dict[str, Any]] | None = None
+    progress: dict[str, Any] | None = None
 
 
 class CreateItemPayload(BaseModel):
@@ -377,19 +379,39 @@ def api_patch_item(
 ) -> dict[str, Any]:
     conn = get_connection()
     try:
-        updated = repo.update_item_fields(
-            conn,
-            item_id,
-            status=payload.status,
-            user_rating=payload.user_rating,
-            title_ru=payload.title_ru,
-            summary=payload.summary,
-            user_note=payload.user_note,
-            tags=payload.tags,
-        )
+        try:
+            updated = repo.update_item_fields(
+                conn,
+                item_id,
+                status=payload.status,
+                user_rating=payload.user_rating,
+                title_ru=payload.title_ru,
+                summary=payload.summary,
+                user_note=payload.user_note,
+                tags=payload.tags,
+                highlights=payload.highlights,
+                progress=payload.progress,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not updated:
             raise HTTPException(status_code=404, detail="Not found")
         return updated
+    finally:
+        conn.close()
+
+
+@app.post("/api/items/{item_id}/reenrich")
+def api_reenrich_item(
+    item_id: int,
+    _user: dict[str, Any] = Depends(require_tma_auth),
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        res = reenrich_item(conn, item_id)
+        if res.get("status") == "not_found":
+            raise HTTPException(status_code=404, detail="Not found")
+        return res
     finally:
         conn.close()
 

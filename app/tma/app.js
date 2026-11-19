@@ -65,7 +65,7 @@
   function hydrateFromTgCloudStorage() {
     if (!isTgWebApp || !tg || !tg.CloudStorage || typeof tg.CloudStorage.getItems !== "function") return;
     try {
-      tg.CloudStorage.getItems(["sb_theme_mode", "sb_view_modes_by_tab_v1"], (err, values) => {
+      tg.CloudStorage.getItems(["sb_theme_mode", "sb_view_modes_by_tab_v1", "sb_zen_prefs_v1"], (err, values) => {
         if (err || !values) return;
         let changedViewMode = false;
         let changedTheme = false;
@@ -88,6 +88,12 @@
                 changedViewMode = true;
               }
             }
+          } catch {}
+        }
+        if (values.sb_zen_prefs_v1 && typeof applyZenPrefsObject === "function") {
+          try {
+            const zp = JSON.parse(values.sb_zen_prefs_v1);
+            applyZenPrefsObject(zp, { syncCloud: false });
           } catch {}
         }
         if (changedTheme) applyTheme();
@@ -256,6 +262,60 @@
     } catch {}
   }
 
+  let zenPrefs = { fontSize: 18, width: "medium" };
+  try {
+    const rawZp = localStorage.getItem("sb_zen_prefs_v1");
+    if (rawZp) {
+      const parsedZp = JSON.parse(rawZp);
+      if (parsedZp && typeof parsedZp === "object") {
+        const fs = Number(parsedZp.fontSize);
+        if (Number.isFinite(fs) && fs >= 15 && fs <= 24) zenPrefs.fontSize = fs;
+        if (["narrow", "medium", "wide"].includes(parsedZp.width)) zenPrefs.width = parsedZp.width;
+      }
+    }
+  } catch {}
+
+  let zenScrollPositions = {};
+  try {
+    const rawZs = localStorage.getItem("sb_zen_scroll_v1");
+    if (rawZs) {
+      const parsedZs = JSON.parse(rawZs);
+      if (parsedZs && typeof parsedZs === "object") zenScrollPositions = parsedZs;
+    }
+  } catch {}
+
+  function applyZenPrefsObject(nextObj, { syncCloud = true } = {}) {
+    if (!nextObj || typeof nextObj !== "object") return;
+    const fs = Number(nextObj.fontSize);
+    if (Number.isFinite(fs) && fs >= 15 && fs <= 24) zenPrefs.fontSize = Math.round(fs);
+    if (["narrow", "medium", "wide"].includes(nextObj.width)) zenPrefs.width = nextObj.width;
+    try {
+      const encoded = JSON.stringify(zenPrefs);
+      localStorage.setItem("sb_zen_prefs_v1", encoded);
+      if (syncCloud) saveCloudPref("sb_zen_prefs_v1", encoded);
+    } catch {}
+    const articleEl = document.getElementById("zenReaderArticle");
+    const contentEl = document.getElementById("zenReaderContent");
+    if (contentEl) contentEl.style.setProperty("--zen-font-size", `${zenPrefs.fontSize}px`);
+    if (articleEl) {
+      articleEl.classList.remove("width-narrow", "width-medium", "width-wide");
+      articleEl.classList.add(`width-${zenPrefs.width}`);
+    }
+  }
+
+  function getStoredZenScroll(itemId) {
+    const val = Number(zenScrollPositions[String(itemId)] || 0);
+    return Number.isFinite(val) ? Math.max(0, Math.min(100, val)) : 0;
+  }
+
+  function saveStoredZenScroll(itemId, pct) {
+    const cleanPct = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+    zenScrollPositions[String(itemId)] = cleanPct;
+    try {
+      localStorage.setItem("sb_zen_scroll_v1", JSON.stringify(zenScrollPositions));
+    } catch {}
+  }
+
   const SMART_VIEWS_META = {
     top_planned: {
       label: "🔥 Топ к просмотру",
@@ -305,6 +365,9 @@
     drawerConfirmDelete: false,
     drawerEditMode: false,
     drawerAddTagMode: false,
+    drawerAddHighlightMode: false,
+    reenrichingItemId: null,
+    zenReaderItemId: null,
     statusPopoverItemId: null,
     ratingPopoverItemId: null,
     filtersSheetOpen: false,
@@ -1152,6 +1215,7 @@
     try {
       const lightboxOpen = posterLightbox && !posterLightbox.classList.contains("hidden");
       if (
+        state.zenReaderItemId !== null ||
         lightboxOpen ||
         state.shortcutsOpen ||
         state.cmdPaletteOpen ||
@@ -1169,7 +1233,9 @@
   if (tg && tg.BackButton) {
     try {
       tg.BackButton.onClick(() => {
-        if (posterLightbox && !posterLightbox.classList.contains("hidden")) {
+        if (state.zenReaderItemId !== null) {
+          closeZenReader();
+        } else if (posterLightbox && !posterLightbox.classList.contains("hidden")) {
           closePosterLightbox();
         } else if (state.shortcutsOpen) {
           closeShortcutsModal();
@@ -1380,22 +1446,223 @@
     ];
   }
 
-  function buildDrawerReaderHtml(item) {
-    const fullReaderText = getDrawerReaderText(item);
-    if (!fullReaderText) return "";
+  function getItemHighlights(item) {
+    const meta = parseMeta(item ? item.meta : null);
+    return Array.isArray(meta.highlights) ? meta.highlights.filter((h) => h && (typeof h === "string" || h.text)) : [];
+  }
+
+  function getItemProgressSummary(item) {
+    if (!item) return null;
+    const meta = parseMeta(item.meta);
+    const p = meta.progress && typeof meta.progress === "object" ? meta.progress : null;
+    if (!p) return null;
+    if (item.category === "series" && p.kind === "series") {
+      const season = Math.max(1, Number(p.season || 1));
+      const episode = Math.max(0, Number(p.episode || 0));
+      if (episode === 0 && season <= 1) return null;
+      const totalSeasons = Number(p.total_seasons || meta.seasons_count || 0);
+      const pct = totalSeasons > 0 ? Math.min(100, Math.round((season / totalSeasons) * 100)) : null;
+      const short = `С${season}·Э${episode}`;
+      return { label: `Сезон ${season} · Серия ${episode}`, pct, short };
+    }
+    if (item.category === "book" && p.kind === "book") {
+      const page = Math.max(0, Number(p.page || 0));
+      const total = Math.max(0, Number(p.total_pages || meta.page_count || 0));
+      const pct =
+        total > 0
+          ? Math.min(100, Math.round((page / total) * 100))
+          : Math.max(0, Math.min(100, Number(p.percent || 0)));
+      if (page === 0 && pct === 0) return null;
+      const label = total > 0 ? `${page} / ${total} стр. (${pct}%)` : `стр. ${page}`;
+      const short = pct > 0 ? `${pct}%` : `стр. ${page}`;
+      return { label, pct: pct > 0 ? pct : null, short };
+    }
+    if (["article", "post"].includes(item.category) && p.kind === "read") {
+      const scrollPct = Math.max(0, Math.min(100, Number(p.scroll_pct || 0)));
+      if (scrollPct < 5) return null;
+      return { label: `Прочитано ${scrollPct}%`, pct: scrollPct, short: `${scrollPct}%` };
+    }
+    return null;
+  }
+
+  function getZenReadableText(item) {
+    if (!item) return "";
+    const full = getDrawerReaderText(item);
+    if (full) return full;
+    if (["article", "post", "idea"].includes(item.category) && (item.summary || "").trim().length >= 220) {
+      return item.summary.trim();
+    }
+    return "";
+  }
+
+  function buildDrawerAttentionBannerHtml(item) {
+    if (!item || !item.processing_status || item.processing_status === "ok") return "";
+    const isBusy = Number(state.reenrichingItemId) === Number(item.id);
+    const msg =
+      item.processing_status === "needs_choice"
+        ? "Найдено несколько совпадений — попробуйте автоматическое переобогащение."
+        : "Метаданные или постер подтянулись не полностью.";
     return `
-      <details class="drawer-section drawer-reader-box">
-        <summary class="drawer-reader-summary">
-          <span>📖 Полный текст из источника</span>
-          <span>▾</span>
-        </summary>
-        <div class="drawer-reader-content">${linkifyText(fullReaderText)}</div>
-      </details>
+      <div class="drawer-attention-banner">
+        <span>⚠️ ${escapeHtml(msg)}</span>
+        <button type="button" class="drawer-reenrich-btn${isBusy ? " is-loading" : ""}" data-drawer-reenrich="${item.id}"${isBusy ? " disabled" : ""}>
+          <span class="reenrich-ico">🔄</span>
+          <span>${isBusy ? "Обновляю..." : "Переобогатить"}</span>
+        </button>
+      </div>
     `;
   }
 
+  function buildDrawerProgressHtml(item) {
+    if (!item) return "";
+    const meta = parseMeta(item.meta);
+    if (item.category === "series") {
+      const p = meta.progress && meta.progress.kind === "series" ? meta.progress : {};
+      const season = Math.max(1, Number(p.season || 1));
+      const episode = Math.max(0, Number(p.episode || 0));
+      const totalSeasons = Number(p.total_seasons || meta.seasons_count || 0);
+      const badgeText = episode > 0 || season > 1 ? `С${season} · Э${episode}` : "Не начато";
+      const pct = totalSeasons > 0 && (episode > 0 || season > 1) ? Math.min(100, Math.round((season / totalSeasons) * 100)) : 0;
+      const trackHtml =
+        pct > 0
+          ? `<div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pct}%"></div></div>`
+          : "";
+      return `
+        <div class="drawer-section drawer-progress-card">
+          <div class="progress-header-row">
+            <div class="drawer-section-title">📺 Прогресс просмотра</div>
+            <span class="progress-badge-lg">${escapeHtml(badgeText)}</span>
+          </div>
+          ${trackHtml}
+          <div class="progress-stepper-row">
+            <button type="button" class="progress-step-btn" data-prog-series-delta="-1" data-id="${item.id}" title="Предыдущая серия">−1</button>
+            <button type="button" class="progress-step-btn primary" data-prog-series-delta="1" data-id="${item.id}">+1 серия</button>
+            <button type="button" class="progress-step-btn" data-prog-season-delta="1" data-id="${item.id}">+1 сезон</button>
+            <label class="progress-num-group">С <input type="number" class="progress-num-input" data-prog-series-input="season" data-id="${item.id}" min="1" max="999" value="${season}" /></label>
+            <label class="progress-num-group">Э <input type="number" class="progress-num-input" data-prog-series-input="episode" data-id="${item.id}" min="0" max="9999" value="${episode}" /></label>
+          </div>
+        </div>
+      `;
+    }
+    if (item.category === "book") {
+      const p = meta.progress && meta.progress.kind === "book" ? meta.progress : {};
+      const page = Math.max(0, Number(p.page || 0));
+      const totalPages = Math.max(0, Number(p.total_pages || meta.page_count || 0));
+      const pct =
+        totalPages > 0
+          ? Math.min(100, Math.round((page / totalPages) * 100))
+          : Math.max(0, Math.min(100, Number(p.percent || 0)));
+      const badgeText =
+        totalPages > 0
+          ? `${page} / ${totalPages} стр. · ${pct}%`
+          : page > 0
+          ? `стр. ${page}`
+          : "Не начато";
+      const sliderHtml =
+        totalPages > 0
+          ? `<input type="range" class="progress-slider" data-prog-book-slider="${item.id}" min="0" max="${totalPages}" value="${Math.min(page, totalPages)}" aria-label="Прогресс чтения в страницах" />`
+          : "";
+      const doneBtnHtml =
+        totalPages > 0 && page >= totalPages && item.status !== "done"
+          ? `<button type="button" class="progress-done-hint" data-prog-book-done="${item.id}">✅ Отметить «Готово»</button>`
+          : "";
+      return `
+        <div class="drawer-section drawer-progress-card">
+          <div class="progress-header-row">
+            <div class="drawer-section-title">📖 Прогресс чтения</div>
+            <span class="progress-badge-lg" id="drawerBookProgBadge">${escapeHtml(badgeText)}</span>
+          </div>
+          ${sliderHtml}
+          <div class="progress-stepper-row">
+            <label class="progress-num-group">Стр. <input type="number" class="progress-num-input" data-prog-book-input="page" data-id="${item.id}" min="0" max="99999" value="${page}" /></label>
+            <label class="progress-num-group">из <input type="number" class="progress-num-input" data-prog-book-input="total_pages" data-id="${item.id}" min="0" max="99999" value="${totalPages || ""}" placeholder="стр." /></label>
+            <button type="button" class="progress-step-btn primary" data-prog-book-delta="10" data-id="${item.id}">+10</button>
+            <button type="button" class="progress-step-btn" data-prog-book-delta="25" data-id="${item.id}">+25</button>
+          </div>
+          ${doneBtnHtml}
+        </div>
+      `;
+    }
+    return "";
+  }
+
+  function buildDrawerHighlightsHtml(item) {
+    if (!item) return "";
+    const hls = getItemHighlights(item);
+    const cardsHtml = hls
+      .map((hl, idx) => {
+        const hlText = typeof hl === "string" ? hl : String(hl.text || "");
+        const hlNote = typeof hl === "object" && hl && hl.note ? String(hl.note) : "";
+        const hlId = typeof hl === "object" && hl && hl.id ? String(hl.id) : `hl-${idx + 1}`;
+        return `
+          <div class="drawer-highlight-card">
+            <div class="drawer-hl-text">${escapeHtml(hlText)}</div>
+            ${hlNote ? `<div class="drawer-hl-note">💬 ${escapeHtml(hlNote)}</div>` : ""}
+            <div class="drawer-hl-actions">
+              <button type="button" class="drawer-hl-mini-btn" data-hl-copy="${escapeHtml(hlId)}" data-id="${item.id}" title="Копировать">Копировать</button>
+              <button type="button" class="drawer-hl-mini-btn danger" data-hl-del="${escapeHtml(hlId)}" data-id="${item.id}" title="Удалить">Удалить</button>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    const addFormHtml = state.drawerAddHighlightMode
+      ? `
+        <div class="zen-manual-quote-box">
+          <textarea id="drawerNewHighlightInput" class="drawer-note-textarea" rows="3" placeholder="Вставьте важную цитату или тезис..."></textarea>
+          <input type="text" id="drawerNewHighlightNoteInput" class="drawer-edit-input" placeholder="Короткий комментарий (необязательно)" />
+          <div class="drawer-note-footer">
+            <button type="button" class="confirm-cancel-btn" data-drawer-hl-cancel>Отмена</button>
+            <button type="button" class="liquid-pill drawer-save-note-btn" data-drawer-hl-submit="${item.id}">Сохранить цитату</button>
+          </div>
+        </div>
+      `
+      : "";
+
+    return `
+      <div class="drawer-section">
+        <div class="progress-header-row">
+          <div class="drawer-section-title">✨ Цитаты и хайлайты${hls.length ? ` (${hls.length})` : ""}</div>
+          <button type="button" class="genre-pill drawer-add-tag-pill" data-drawer-hl-toggle>+ Цитата</button>
+        </div>
+        ${addFormHtml}
+        ${hls.length ? `<div class="drawer-highlights-list">${cardsHtml}</div>` : `<div style="font-size:12.5px;color:var(--muted);">Выделите фрагмент в режиме чтения или добавьте цитату вручную — она попадёт в поиск.</div>`}
+      </div>
+    `;
+  }
+
+  function buildDrawerReaderHtml(item) {
+    const readable = getZenReadableText(item);
+    const fullReaderText = getDrawerReaderText(item);
+    if (!readable && !fullReaderText) return "";
+    const prog = getItemProgressSummary(item);
+    const readBadge = prog && prog.pct > 0 ? `<span class="progress-chip">${escapeHtml(prog.label)}</span>` : "";
+    const ctaHtml = readable
+      ? `
+        <div class="drawer-reader-cta-row">
+          <button type="button" class="drawer-zen-open-btn" data-open-zen-reader="${item.id}">📖 Читать на весь экран</button>
+          ${readBadge}
+        </div>
+      `
+      : "";
+    const detailsHtml = fullReaderText
+      ? `
+        <details class="drawer-reader-details">
+          <summary class="drawer-reader-summary">
+            <span>📖 Полный текст из источника</span>
+            <span>▾</span>
+          </summary>
+          <div class="drawer-reader-content">${linkifyText(fullReaderText)}</div>
+        </details>
+      `
+      : "";
+    return `<div class="drawer-section drawer-reader-box">${ctaHtml}${detailsHtml}</div>`;
+  }
+
   function buildDrawerActionsFooterHtml(item) {
-    const chatHtml = `<span></span>`;
+    const isBusy = Number(state.reenrichingItemId) === Number(item.id);
+    const reenrichHtml = `<button type="button" class="drawer-reenrich-btn${isBusy ? " is-loading" : ""}" data-drawer-reenrich="${item.id}"${isBusy ? " disabled" : ""} title="Повторно подтянуть постер, рейтинги, описание и текст"><span class="reenrich-ico">🔄</span><span>${isBusy ? "Обновляю..." : "Переобогатить"}</span></button>`;
     const deleteFooterHtml = state.drawerConfirmDelete
       ? `
         <div class="drawer-confirm-box">
@@ -1405,7 +1672,7 @@
         </div>
       `
       : `<button type="button" class="drawer-delete-btn" data-drawer-delete-ask>${UI_ICONS.trash}<span>Удалить</span></button>`;
-    return `${chatHtml}${deleteFooterHtml}`;
+    return `${reenrichHtml}${deleteFooterHtml}`;
   }
 
   async function startInboxTriage() {
@@ -1513,6 +1780,21 @@
     if (opts.syncTags) {
       const tagsSection = document.getElementById("drawerTagsSection");
       if (tagsSection) tagsSection.innerHTML = buildDrawerTagsInnerHtml(item);
+    }
+
+    if (opts.syncProgress) {
+      const progSlot = document.getElementById("drawerProgressSlot");
+      if (progSlot) progSlot.innerHTML = buildDrawerProgressHtml(item);
+    }
+
+    if (opts.syncHighlights) {
+      const hlSlot = document.getElementById("drawerHighlightsSlot");
+      if (hlSlot) hlSlot.innerHTML = buildDrawerHighlightsHtml(item);
+    }
+
+    if (opts.syncReader) {
+      const readerSlot = document.getElementById("drawerReaderSlot");
+      if (readerSlot) readerSlot.innerHTML = buildDrawerReaderHtml(item);
     }
 
     if (!opts.skipNoteInput) {
@@ -1683,9 +1965,14 @@
         })()
       : "";
 
+    const attentionBannerHtml = buildDrawerAttentionBannerHtml(item);
+    const progressSlotHtml = `<div id="drawerProgressSlot">${buildDrawerProgressHtml(item)}</div>`;
+    const highlightsSlotHtml = `<div id="drawerHighlightsSlot">${buildDrawerHighlightsHtml(item)}</div>`;
+
     drawerBody.dataset.renderedItemId = String(item.id);
     drawerBody.innerHTML = `
       ${triageBannerHtml}
+      ${attentionBannerHtml}
       <div class="drawer-hero">
         <div class="drawer-poster">${posterHtml}</div>
         <div style="min-width:0;flex:1;">
@@ -1701,6 +1988,7 @@
 
       ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
       ${ytSectionHtml}
+      ${progressSlotHtml}
 
       <div class="drawer-section">
         <div class="drawer-section-title">Статус</div>
@@ -1718,6 +2006,7 @@
       ${summaryEditHtml}
       ${noteSectionHtml}
       ${readerHtml}
+      ${highlightsSlotHtml}
       ${tagsHtml}
 
       <div class="drawer-actions-footer" id="drawerActionsFooter">
@@ -1756,6 +2045,9 @@
           const hasPrevText = Boolean(readTimeSlot.previousSibling && String(readTimeSlot.previousSibling.textContent || "").trim());
           readTimeSlot.textContent = `${hasPrevText ? " · " : ""}⏱ ~${readMin} мин чтения`;
         }
+      }
+      if (Number(state.zenReaderItemId) === idNum) {
+        renderZenReader();
       }
     } catch {}
   }
@@ -1831,6 +2123,7 @@
     state.drawerConfirmDelete = false;
     state.drawerEditMode = false;
     state.drawerAddTagMode = false;
+    state.drawerAddHighlightMode = false;
 
     if (sourcePoster && canRunHeroTransition()) {
       const vtSeq = ++activeHeroVtSeq;
@@ -1907,6 +2200,7 @@
     state.drawerConfirmDelete = false;
     state.drawerEditMode = false;
     state.drawerAddTagMode = false;
+    state.drawerAddHighlightMode = false;
     state.triageMode = false;
     state.triageCompletedView = false;
     state.luckyMode = false;
@@ -1953,6 +2247,23 @@
     if (e.target === drawerOverlay) closeDetailDrawer();
   });
 
+  async function updateItemProgress(itemId, nextProgress, opts = {}) {
+    const item = findDrawerItem(itemId);
+    if (!item) return;
+    const payload = { progress: nextProgress };
+    if (opts.markDone) {
+      payload.status = "done";
+    } else if (
+      ["inbox", "planned"].includes(item.status || "inbox") &&
+      ((nextProgress.kind === "series" && (nextProgress.episode > 0 || nextProgress.season > 1)) ||
+        (nextProgress.kind === "book" && nextProgress.page > 0))
+    ) {
+      payload.status = "in_progress";
+    }
+    haptic("selection");
+    await patchItem(itemId, payload, { syncProgress: true });
+  }
+
   drawerBody.addEventListener("input", (e) => {
     if (e.target && e.target.id === "drawerNoteInput") {
       const inp = e.target;
@@ -1964,6 +2275,57 @@
       noteSaveTimer = setTimeout(() => {
         flushPendingNoteSave();
       }, 650);
+      return;
+    }
+    if (e.target && e.target.dataset && e.target.dataset.progBookSlider) {
+      const pageVal = Math.max(0, Number(e.target.value || 0));
+      const maxVal = Math.max(0, Number(e.target.max || 0));
+      const pct = maxVal > 0 ? Math.min(100, Math.round((pageVal / maxVal) * 100)) : 0;
+      const badge = document.getElementById("drawerBookProgBadge");
+      if (badge && maxVal > 0) badge.textContent = `${pageVal} / ${maxVal} стр. · ${pct}%`;
+      const pageInp = drawerBody.querySelector('[data-prog-book-input="page"]');
+      if (pageInp) pageInp.value = String(pageVal);
+    }
+  });
+
+  drawerBody.addEventListener("change", async (e) => {
+    const t = e.target;
+    if (!t || !t.dataset) return;
+    if (t.dataset.progSeriesInput && t.dataset.id) {
+      const id = Number(t.dataset.id);
+      const item = findDrawerItem(id);
+      if (!item) return;
+      const meta = parseMeta(item.meta);
+      const p = meta.progress && meta.progress.kind === "series" ? meta.progress : {};
+      const seasonEl = drawerBody.querySelector(`[data-prog-series-input="season"][data-id="${id}"]`);
+      const epEl = drawerBody.querySelector(`[data-prog-series-input="episode"][data-id="${id}"]`);
+      const season = Math.max(1, Number(seasonEl ? seasonEl.value : p.season || 1) || 1);
+      const episode = Math.max(0, Number(epEl ? epEl.value : p.episode || 0) || 0);
+      await updateItemProgress(id, {
+        kind: "series",
+        season,
+        episode,
+        total_seasons: Number(p.total_seasons || meta.seasons_count || 0) || undefined,
+      });
+      return;
+    }
+    if (t.dataset.progBookSlider || (t.dataset.progBookInput && t.dataset.id)) {
+      const id = Number(t.dataset.progBookSlider || t.dataset.id);
+      const item = findDrawerItem(id);
+      if (!item) return;
+      const meta = parseMeta(item.meta);
+      const p = meta.progress && meta.progress.kind === "book" ? meta.progress : {};
+      const pageEl = drawerBody.querySelector(`[data-prog-book-input="page"][data-id="${id}"]`);
+      const totalEl = drawerBody.querySelector(`[data-prog-book-input="total_pages"][data-id="${id}"]`);
+      const page = Math.max(
+        0,
+        Number(t.dataset.progBookSlider ? t.value : pageEl ? pageEl.value : p.page || 0) || 0
+      );
+      const totalPages = Math.max(
+        0,
+        Number(totalEl ? totalEl.value : p.total_pages || meta.page_count || 0) || 0
+      );
+      await updateItemProgress(id, { kind: "book", page, total_pages: totalPages });
     }
   });
 
@@ -1978,10 +2340,156 @@
       e.preventDefault();
       const submitBtn = drawerBody.querySelector("[data-drawer-add-tag-submit]");
       if (submitBtn) submitBtn.click();
+      return;
+    }
+    if (e.target && e.target.id === "drawerNewHighlightInput" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      const submitBtn = drawerBody.querySelector("[data-drawer-hl-submit]");
+      if (submitBtn) submitBtn.click();
     }
   });
 
   drawerBody.addEventListener("click", async (e) => {
+    const zenBtn = e.target.closest("[data-open-zen-reader]");
+    if (zenBtn && zenBtn.dataset.openZenReader) {
+      openZenReader(Number(zenBtn.dataset.openZenReader));
+      return;
+    }
+
+    const reenrichBtn = e.target.closest("[data-drawer-reenrich]");
+    if (reenrichBtn && reenrichBtn.dataset.drawerReenrich) {
+      await reenrichItemInDrawer(Number(reenrichBtn.dataset.drawerReenrich));
+      return;
+    }
+
+    const seriesStepBtn = e.target.closest("[data-prog-series-delta]");
+    if (seriesStepBtn && seriesStepBtn.dataset.id) {
+      const id = Number(seriesStepBtn.dataset.id);
+      const delta = Number(seriesStepBtn.dataset.progSeriesDelta || 0);
+      const item = findDrawerItem(id);
+      if (item) {
+        const meta = parseMeta(item.meta);
+        const p = meta.progress && meta.progress.kind === "series" ? meta.progress : {};
+        const season = Math.max(1, Number(p.season || 1));
+        const nextEp = Math.max(0, Number(p.episode || 0) + delta);
+        await updateItemProgress(id, {
+          kind: "series",
+          season,
+          episode: nextEp,
+          total_seasons: Number(p.total_seasons || meta.seasons_count || 0) || undefined,
+        });
+      }
+      return;
+    }
+
+    const seasonStepBtn = e.target.closest("[data-prog-season-delta]");
+    if (seasonStepBtn && seasonStepBtn.dataset.id) {
+      const id = Number(seasonStepBtn.dataset.id);
+      const delta = Number(seasonStepBtn.dataset.progSeasonDelta || 0);
+      const item = findDrawerItem(id);
+      if (item) {
+        const meta = parseMeta(item.meta);
+        const p = meta.progress && meta.progress.kind === "series" ? meta.progress : {};
+        const nextSeason = Math.max(1, Number(p.season || 1) + delta);
+        await updateItemProgress(id, {
+          kind: "series",
+          season: nextSeason,
+          episode: 1,
+          total_seasons: Number(p.total_seasons || meta.seasons_count || 0) || undefined,
+        });
+      }
+      return;
+    }
+
+    const bookStepBtn = e.target.closest("[data-prog-book-delta]");
+    if (bookStepBtn && bookStepBtn.dataset.id) {
+      const id = Number(bookStepBtn.dataset.id);
+      const delta = Number(bookStepBtn.dataset.progBookDelta || 0);
+      const item = findDrawerItem(id);
+      if (item) {
+        const meta = parseMeta(item.meta);
+        const p = meta.progress && meta.progress.kind === "book" ? meta.progress : {};
+        const totalPages = Math.max(0, Number(p.total_pages || meta.page_count || 0));
+        let nextPage = Math.max(0, Number(p.page || 0) + delta);
+        if (totalPages > 0) nextPage = Math.min(totalPages, nextPage);
+        await updateItemProgress(id, { kind: "book", page: nextPage, total_pages: totalPages });
+      }
+      return;
+    }
+
+    const bookDoneBtn = e.target.closest("[data-prog-book-done]");
+    if (bookDoneBtn && bookDoneBtn.dataset.progBookDone) {
+      const id = Number(bookDoneBtn.dataset.progBookDone);
+      const item = findDrawerItem(id);
+      if (item) {
+        const meta = parseMeta(item.meta);
+        const p = meta.progress && meta.progress.kind === "book" ? meta.progress : {};
+        const totalPages = Math.max(0, Number(p.total_pages || meta.page_count || 0));
+        const page = totalPages > 0 ? totalPages : Math.max(0, Number(p.page || 0));
+        await updateItemProgress(id, { kind: "book", page, total_pages: totalPages }, { markDone: true });
+      }
+      return;
+    }
+
+    if (e.target.closest("[data-drawer-hl-toggle]")) {
+      state.drawerAddHighlightMode = !state.drawerAddHighlightMode;
+      const item = findDrawerItem(state.drawerItemId);
+      const hlSlot = document.getElementById("drawerHighlightsSlot");
+      if (item && hlSlot) {
+        hlSlot.innerHTML = buildDrawerHighlightsHtml(item);
+      } else {
+        renderDetailDrawer();
+      }
+      if (state.drawerAddHighlightMode) {
+        setTimeout(() => {
+          const inp = document.getElementById("drawerNewHighlightInput");
+          if (inp) inp.focus();
+        }, 20);
+      }
+      return;
+    }
+
+    if (e.target.closest("[data-drawer-hl-cancel]")) {
+      state.drawerAddHighlightMode = false;
+      const item = findDrawerItem(state.drawerItemId);
+      const hlSlot = document.getElementById("drawerHighlightsSlot");
+      if (item && hlSlot) hlSlot.innerHTML = buildDrawerHighlightsHtml(item);
+      return;
+    }
+
+    const hlSubmitBtn = e.target.closest("[data-drawer-hl-submit]");
+    if (hlSubmitBtn && hlSubmitBtn.dataset.drawerHlSubmit) {
+      const id = Number(hlSubmitBtn.dataset.drawerHlSubmit);
+      const txtEl = document.getElementById("drawerNewHighlightInput");
+      const noteEl = document.getElementById("drawerNewHighlightNoteInput");
+      const quoteText = txtEl ? txtEl.value.trim() : "";
+      const quoteNote = noteEl ? noteEl.value.trim() : "";
+      if (quoteText) {
+        state.drawerAddHighlightMode = false;
+        await saveZenHighlight(id, quoteText, quoteNote);
+      }
+      return;
+    }
+
+    const hlCopyBtn = e.target.closest("[data-hl-copy]");
+    if (hlCopyBtn && hlCopyBtn.dataset.id) {
+      const item = findDrawerItem(Number(hlCopyBtn.dataset.id));
+      const hls = getItemHighlights(item);
+      const targetHl = hls.find((h, idx) => String(h.id || `hl-${idx + 1}`) === hlCopyBtn.dataset.hlCopy);
+      const txt = targetHl ? (typeof targetHl === "string" ? targetHl : targetHl.text || "") : "";
+      if (txt && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).catch(() => {});
+      }
+      showLiveToast("📋 Цитата скопирована", { durationMs: 2200 });
+      return;
+    }
+
+    const hlDelBtn = e.target.closest("[data-hl-del]");
+    if (hlDelBtn && hlDelBtn.dataset.id) {
+      await deleteItemHighlight(Number(hlDelBtn.dataset.id), hlDelBtn.dataset.hlDel);
+      return;
+    }
+
     if (e.target.closest("[data-triage-skip]")) {
       advanceInboxTriage({ processed: false, currentId: state.drawerItemId });
       return;
@@ -2732,7 +3240,12 @@
       ? `<div class="list-summary-snippet">${escapeHtml(cleanSummary)}</div>`
       : "";
 
+    const prog = getItemProgressSummary(item);
+    const hlCount = getItemHighlights(item).length;
+    const progBadgeHtml = prog ? `<span class="progress-chip">${escapeHtml(prog.short)}</span>` : "";
+    const hlBadgeHtml = hlCount ? `<span class="highlight-count-chip">✨ ${hlCount}</span>` : "";
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
+    const ratingsRowHtml = ratingsHtml || progBadgeHtml || hlBadgeHtml ? `<div class="list-ratings">${ratingsHtml}${progBadgeHtml}${hlBadgeHtml}</div>` : "";
     const noteBadgeHtml = meta.user_note
       ? `<div class="list-note-badge" title="${escapeHtml(meta.user_note)}">✍️ ${escapeHtml(meta.user_note)}</div>`
       : "";
@@ -2766,7 +3279,7 @@
             </div>
             ${subParts.length ? `<div class="list-subline">${subParts.join(" · ")}</div>` : ""}
             ${snippetHtml}
-            ${ratingsHtml ? `<div class="list-ratings">${ratingsHtml}</div>` : ""}
+            ${ratingsRowHtml}
             ${noteBadgeHtml}
             ${tagsHtml}
             <div class="list-mobile-actions">${mobileActionsHtml}</div>
@@ -2808,11 +3321,19 @@
 
     const genresHtml = buildTagsLineHtml(item, "genres-line", "genre-pill");
 
+    const prog = getItemProgressSummary(item);
+    const hlCount = getItemHighlights(item).length;
+    const progBadgeHtml = prog ? `<span class="progress-chip">${escapeHtml(prog.short)}</span>` : "";
+    const hlBadgeHtml = hlCount ? `<span class="highlight-count-chip">✨ ${hlCount}</span>` : "";
     const noteBadgeHtml = meta.user_note
       ? `<div class="list-note-badge" title="${escapeHtml(meta.user_note)}">✍️ ${escapeHtml(meta.user_note)}</div>`
       : "";
     const summaryHtml = item.summary ? `<div class="summary-text">${escapeHtml(item.summary)}</div>` : "";
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
+    const ratingsBarHtml =
+      ratingsHtml || progBadgeHtml || hlBadgeHtml
+        ? `<div class="ratings-bar">${ratingsHtml}${progBadgeHtml}${hlBadgeHtml}</div>`
+        : "";
     const cornerSourceHtml = buildCornerSourceHtml(item);
 
     let topBlockHtml = "";
@@ -2826,7 +3347,7 @@
           <div class="card-title">${escapeHtml(item.title_ru)}${yearStr}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}</div>
           ${origLine}
           ${creatorLine}
-          ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
+          ${ratingsBarHtml}
           ${noteBadgeHtml}
         </div>
       `;
@@ -2840,7 +3361,7 @@
           <div class="card-title">${escapeHtml(item.title_ru)}${yearStr}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}</div>
           ${origLine}
           ${creatorLine}
-          ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
+          ${ratingsBarHtml}
           ${noteBadgeHtml}
         </div>
       `;
@@ -2852,7 +3373,7 @@
             <div class="card-title">${escapeHtml(item.title_ru)}${yearStr}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}</div>
             ${origLine}
             ${creatorLine}
-            ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
+            ${ratingsBarHtml}
             ${noteBadgeHtml}
           </div>
         </div>
@@ -2904,10 +3425,18 @@
       ? `<div class="poster-score-pill ${scoreBadge.isUser ? "is-user-score" : ""}">${escapeHtml(scoreBadge.text)}</div>`
       : "";
 
+    const prog = getItemProgressSummary(item);
+    const posterProgressBarHtml =
+      prog && prog.pct > 0
+        ? `<div class="poster-progress-bar" aria-hidden="true"><span style="width:${prog.pct}%"></span></div>`
+        : "";
+
     const subParts = [];
     if (item.release_year) subParts.push(String(item.release_year));
     if (shouldShowCreator(item)) subParts.push(escapeHtml(item.creator));
-    if (item.category === "series" && meta.seasons_count) {
+    if (prog && prog.short && ["series", "book"].includes(item.category)) {
+      subParts.push(escapeHtml(prog.short));
+    } else if (item.category === "series" && meta.seasons_count) {
       subParts.push(`${Number(meta.seasons_count)} сез.`);
     }
     if (!subParts.length) {
@@ -2922,6 +3451,7 @@
       <article class="poster-card ${catClass}${isVideo ? " is-video-poster" : ""}${isSel ? " is-selected" : ""}" data-open-id="${item.id}">
         <div class="poster-cover">
           ${coverInner}
+          ${posterProgressBarHtml}
           <button type="button" class="poster-status-dot-btn" data-action="status-menu" data-id="${item.id}" title="Статус: ${escapeHtml(stMeta.label)}" aria-label="Статус: ${escapeHtml(stMeta.label)}">
             <span style="display:inline-flex;color:${stMeta.dot};">${stMeta.svg}</span>
           </button>
@@ -2958,7 +3488,15 @@
       ? `<img src="${escapeHtml(item.poster_url)}" alt="" loading="lazy" />`
       : `<span>${emoji}</span>`;
     const yearStr = item.release_year ? ` (${item.release_year})` : "";
+    const prog = getItemProgressSummary(item);
+    const hlCount = getItemHighlights(item).length;
+    const progBadgeHtml = prog ? `<span class="progress-chip">${escapeHtml(prog.short)}</span>` : "";
+    const hlBadgeHtml = hlCount ? `<span class="highlight-count-chip">✨ ${hlCount}</span>` : "";
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: false });
+    const ratingsBarHtml =
+      ratingsHtml || progBadgeHtml || hlBadgeHtml
+        ? `<div class="ratings-bar">${ratingsHtml}${progBadgeHtml}${hlBadgeHtml}</div>`
+        : "";
     const cornerSourceHtml = buildCornerSourceHtml(item);
 
     const mediaBlock = isTextOnly
@@ -2981,7 +3519,7 @@
           </div>
         </div>
         ${snippetHtml}
-        ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
+        ${ratingsBarHtml}
         <div class="card-footer" style="padding-top:8px;">
           ${buildCardActionsHtml(item, "kanban-actions")}
         </div>
@@ -4012,6 +4550,29 @@
       }
       target.meta = metaObj;
     }
+    if (payload.highlights !== undefined) {
+      const metaObj = parseMeta(target.meta);
+      if (Array.isArray(payload.highlights) && payload.highlights.length > 0) {
+        metaObj.highlights = [...payload.highlights];
+      } else {
+        delete metaObj.highlights;
+      }
+      target.meta = metaObj;
+    }
+    if (payload.progress !== undefined) {
+      const metaObj = parseMeta(target.meta);
+      if (
+        payload.progress &&
+        typeof payload.progress === "object" &&
+        Object.keys(payload.progress).length > 0 &&
+        !payload.progress.clear
+      ) {
+        metaObj.progress = { ...payload.progress };
+      } else {
+        delete metaObj.progress;
+      }
+      target.meta = metaObj;
+    }
   }
 
   async function patchItem(itemId, payload, opts = {}) {
@@ -4026,7 +4587,11 @@
         : null;
     const syncTags = payload.tags !== undefined;
     const syncSummary = Boolean(opts.syncSummary);
+    const syncProgress = Boolean(opts.syncProgress || payload.progress !== undefined);
+    const syncHighlights = Boolean(opts.syncHighlights || payload.highlights !== undefined);
+    const syncReader = Boolean(opts.syncReader || payload.progress !== undefined);
     const skipNoteInput = Boolean(opts.fromNoteAutosave);
+    const syncOpts = { skipNoteInput, syncTags, syncSummary, syncProgress, syncHighlights, syncReader };
     const canUpdateTabCounts = state.status === "all" && !state.tags.length && !state.q && !state.smart;
 
     function rollbackPatch() {
@@ -4041,7 +4606,7 @@
         state.externalDrawerItem = prevSnapshot;
       }
       if (Number(state.drawerItemId) === numId) {
-        syncDetailDrawerInPlace(prevSnapshot, { skipNoteInput, syncTags, syncSummary });
+        syncDetailDrawerInPlace(prevSnapshot, syncOpts);
       }
     }
 
@@ -4054,12 +4619,12 @@
       }
       renderCatalog({ skipDrawer: true });
       if (Number(state.drawerItemId) === numId) {
-        syncDetailDrawerInPlace(target, { skipNoteInput, syncTags, syncSummary });
+        syncDetailDrawerInPlace(target, syncOpts);
       }
     } else if (isExternal) {
       applyPayloadToItem(state.externalDrawerItem, payload);
       if (Number(state.drawerItemId) === numId) {
-        syncDetailDrawerInPlace(state.externalDrawerItem, { skipNoteInput, syncTags, syncSummary });
+        syncDetailDrawerInPlace(state.externalDrawerItem, syncOpts);
       }
     }
 
@@ -4096,7 +4661,7 @@
         renderCatalog({ skipDrawer: true });
       }
       if (Number(state.drawerItemId) === numId) {
-        syncDetailDrawerInPlace(updated, { skipNoteInput, syncTags, syncSummary });
+        syncDetailDrawerInPlace(updated, syncOpts);
       }
       if (payload.tags !== undefined) {
         loadTags();
@@ -4106,6 +4671,81 @@
     }
     rollbackPatch();
     return false;
+  }
+
+  async function reenrichItemInDrawer(itemId) {
+    const numId = Number(itemId);
+    if (!numId || state.reenrichingItemId === numId) return false;
+    state.reenrichingItemId = numId;
+    if (Number(state.drawerItemId) === numId) {
+      renderDetailDrawer();
+    }
+    showLiveToast("🔄 Обновляю метаданные и постер...", { durationMs: 0 });
+    try {
+      const res = await fetch(`/api/items/${numId}/reenrich`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      state.reenrichingItemId = null;
+      if (res.status === 401 || res.status === 403) {
+        hideLiveToast();
+        if (Number(state.drawerItemId) === numId) renderDetailDrawer();
+        showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+        return false;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (Number(state.drawerItemId) === numId) renderDetailDrawer();
+        showLiveToast(data.detail || "Не удалось обновить данные.", { durationMs: 4200 });
+        return false;
+      }
+      const updated = data.item;
+      if (updated && updated.id) {
+        const idx = state.items.findIndex((i) => Number(i.id) === numId);
+        if (idx !== -1) {
+          state.items[idx] = updated;
+        }
+        if (state.externalDrawerItem && Number(state.externalDrawerItem.id) === numId) {
+          state.externalDrawerItem = updated;
+        }
+        clearCatalogCache();
+        renderCatalog({ skipDrawer: true });
+        loadTags();
+      }
+      if (Number(state.drawerItemId) === numId) {
+        renderDetailDrawer();
+      }
+      const fields = Array.isArray(data.updated_fields) ? data.updated_fields : [];
+      if (data.status === "no_match") {
+        showLiveToast("Совпадений не найдено — уточните название через ✎", { durationMs: 4500 });
+      } else if (fields.length > 0) {
+        const labelMap = {
+          poster_url: "постер",
+          summary: "описание",
+          rating_imdb: "рейтинги",
+          rating_kp: "рейтинги",
+          rating_rt: "рейтинги",
+          title_ru: "название",
+          release_year: "год",
+          creator: "автор",
+          genres: "жанры",
+          tags: "теги",
+          extracted_text: "полный текст",
+          processing_status: "статус",
+        };
+        const humanLabels = [...new Set(fields.map((f) => labelMap[f] || f))].slice(0, 4);
+        showLiveToast(`✨ Обновлено: ${humanLabels.join(", ")}`, { durationMs: 4200 });
+      } else {
+        showLiveToast("✓ Данные уже актуальны", { durationMs: 3200 });
+      }
+      haptic("medium");
+      return true;
+    } catch {
+      state.reenrichingItemId = null;
+      if (Number(state.drawerItemId) === numId) renderDetailDrawer();
+      showLiveToast("Ошибка сети при переобогащении.", { durationMs: 4200 });
+      return false;
+    }
   }
 
   // ==================== БЕЗОПАСНОЕ УДАЛЕНИЕ С UNDO-ТОСТОМ ====================
@@ -5700,6 +6340,10 @@
     }
 
     if (e.key === "Escape") {
+      if (state.zenReaderItemId !== null) {
+        closeZenReader();
+        return;
+      }
       const lightboxOpen = posterLightbox && !posterLightbox.classList.contains("hidden");
       if (
         state.selectedIds.size > 0 &&
@@ -5726,7 +6370,7 @@
       return;
     }
 
-    if (isTyping || e.isComposing) return;
+    if (isTyping || e.isComposing || state.zenReaderItemId !== null) return;
 
     const noMod = !e.ctrlKey && !e.metaKey && !e.altKey;
 
@@ -5779,6 +6423,14 @@
         if (noteInp) {
           e.preventDefault();
           noteInp.focus();
+        }
+        return;
+      }
+      if (keyLower === "r" || e.code === "KeyR") {
+        const curItem = findDrawerItem(state.drawerItemId);
+        if (curItem && getZenReadableText(curItem)) {
+          e.preventDefault();
+          openZenReader(curItem.id);
         }
         return;
       }
@@ -5877,6 +6529,7 @@
         }
         const y = window.scrollY || 0;
         const isAnyOverlayOpen =
+          state.zenReaderItemId !== null ||
           state.drawerItemId !== null ||
           state.filtersSheetOpen ||
           state.quickAddOpen ||
@@ -6019,9 +6672,422 @@
     }
   }
 
+  // ==================== ПОЛНОЭКРАННЫЙ РЕЖИМ ЧТЕНИЯ (ZEN READER + ЦИТАТЫ) ====================
+
+  const zenReaderOverlayEl = document.getElementById("zenReaderOverlay");
+  const zenReaderCloseBtnEl = document.getElementById("zenReaderCloseBtn");
+  const zenReaderTopTitleEl = document.getElementById("zenReaderTopTitle");
+  const zenReaderReadMetaEl = document.getElementById("zenReaderReadMeta");
+  const zenFontDecBtnEl = document.getElementById("zenFontDecBtn");
+  const zenFontIncBtnEl = document.getElementById("zenFontIncBtn");
+  const zenWidthToggleBtnEl = document.getElementById("zenWidthToggleBtn");
+  const zenManualQuoteBtnEl = document.getElementById("zenManualQuoteBtn");
+  const zenOpenSourceLinkEl = document.getElementById("zenOpenSourceLink");
+  const zenProgressFillEl = document.getElementById("zenProgressFill");
+  const zenReaderScrollEl = document.getElementById("zenReaderScroll");
+  const zenReaderArticleEl = document.getElementById("zenReaderArticle");
+  const zenArticleHeadEl = document.getElementById("zenArticleHead");
+  const zenManualQuoteBoxEl = document.getElementById("zenManualQuoteBox");
+  const zenManualQuoteTextEl = document.getElementById("zenManualQuoteText");
+  const zenManualQuoteNoteEl = document.getElementById("zenManualQuoteNote");
+  const zenManualQuoteCancelBtnEl = document.getElementById("zenManualQuoteCancelBtn");
+  const zenManualQuoteSaveBtnEl = document.getElementById("zenManualQuoteSaveBtn");
+  const zenReaderContentEl = document.getElementById("zenReaderContent");
+  const zenReaderHighlightsListEl = document.getElementById("zenReaderHighlightsList");
+  const zenSelectionBarEl = document.getElementById("zenSelectionBar");
+  const zenSaveSelectionBtnEl = document.getElementById("zenSaveSelectionBtn");
+  let pendingSelectedQuoteText = "";
+  let zenOpenedScrollPct = 0;
+
+  function renderZenContentWithHighlights(rawText, highlights) {
+    const textStr = String(rawText || "").trim();
+    if (!textStr) return "";
+    const needleList = (Array.isArray(highlights) ? highlights : [])
+      .map((hl, idx) => ({
+        id: typeof hl === "object" && hl && hl.id ? String(hl.id) : `hl-${idx + 1}`,
+        text: (typeof hl === "string" ? hl : String((hl && hl.text) || "")).trim(),
+      }))
+      .filter((h) => h.text.length >= 4);
+
+    const paragraphs = textStr
+      .split(/\n\s*\n/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    return paragraphs
+      .map((para) => {
+        if (!needleList.length) {
+          return `<p>${linkifyText(para)}</p>`;
+        }
+        const lowerPara = para.toLowerCase();
+        const spans = [];
+        for (const hl of needleList) {
+          const lowerNeedle = hl.text.toLowerCase();
+          const pos = lowerPara.indexOf(lowerNeedle);
+          if (pos === -1) continue;
+          const end = pos + hl.text.length;
+          const overlaps = spans.some((s) => !(end <= s.start || pos >= s.end));
+          if (!overlaps) {
+            spans.push({ start: pos, end, id: hl.id });
+          }
+        }
+        if (!spans.length) {
+          return `<p>${linkifyText(para)}</p>`;
+        }
+        spans.sort((a, b) => a.start - b.start);
+        let cursor = 0;
+        let out = "";
+        for (const sp of spans) {
+          if (sp.start > cursor) {
+            out += linkifyText(para.slice(cursor, sp.start));
+          }
+          const matched = para.slice(sp.start, sp.end);
+          out += `<mark class="zen-highlight" data-hl-id="${escapeHtml(sp.id)}">${escapeHtml(matched)}</mark>`;
+          cursor = sp.end;
+        }
+        if (cursor < para.length) {
+          out += linkifyText(para.slice(cursor));
+        }
+        return `<p>${out}</p>`;
+      })
+      .join("");
+  }
+
+  async function saveZenHighlight(itemId, rawText, rawNote = "") {
+    const numId = Number(itemId);
+    const item = findDrawerItem(numId);
+    const cleanText = String(rawText || "").trim();
+    const cleanNote = String(rawNote || "").trim();
+    if (!item || !cleanText) return false;
+    const prev = getItemHighlights(item).map((h, idx) =>
+      typeof h === "string"
+        ? { id: `hl-${idx + 1}`, text: h, created_at: new Date().toISOString() }
+        : { ...h, id: String(h.id || `hl-${idx + 1}`) }
+    );
+    const existsIdx = prev.findIndex((h) => String(h.text || "").trim().toLowerCase() === cleanText.toLowerCase());
+    let next;
+    if (existsIdx !== -1) {
+      next = [...prev];
+      if (cleanNote) next[existsIdx] = { ...next[existsIdx], note: cleanNote };
+    } else {
+      const entry = {
+        id: `hl-${Date.now()}`,
+        text: cleanText.slice(0, 4000),
+        created_at: new Date().toISOString(),
+      };
+      if (cleanNote) entry.note = cleanNote.slice(0, 1000);
+      next = [...prev, entry];
+    }
+    const ok = await patchItem(numId, { highlights: next }, { syncHighlights: true });
+    if (Number(state.zenReaderItemId) === numId) {
+      renderZenReader({ preserveScroll: true });
+    }
+    showLiveToast("✨ Цитата сохранена", { durationMs: 2600 });
+    return ok;
+  }
+
+  async function deleteItemHighlight(itemId, hlId) {
+    const numId = Number(itemId);
+    const item = findDrawerItem(numId);
+    if (!item || !hlId) return false;
+    const prev = getItemHighlights(item);
+    const next = prev.filter((h, idx) => String((h && h.id) || `hl-${idx + 1}`) !== String(hlId));
+    const ok = await patchItem(numId, { highlights: next }, { syncHighlights: true });
+    if (Number(state.zenReaderItemId) === numId) {
+      renderZenReader({ preserveScroll: true });
+    }
+    return ok;
+  }
+
+  function hideZenSelectionBar() {
+    pendingSelectedQuoteText = "";
+    if (zenSelectionBarEl) zenSelectionBarEl.classList.add("hidden");
+  }
+
+  function updateZenSelectionBar() {
+    if (state.zenReaderItemId === null || !zenReaderContentEl || !zenSelectionBarEl) {
+      hideZenSelectionBar();
+      return;
+    }
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      hideZenSelectionBar();
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    if (!zenReaderContentEl.contains(range.commonAncestorContainer)) {
+      hideZenSelectionBar();
+      return;
+    }
+    const text = String(sel.toString() || "").trim();
+    if (text.length < 6) {
+      hideZenSelectionBar();
+      return;
+    }
+    pendingSelectedQuoteText = text;
+    zenSelectionBarEl.classList.remove("hidden");
+    if (window.innerWidth > 820) {
+      const rect = range.getBoundingClientRect();
+      const barWidth = zenSelectionBarEl.offsetWidth || 170;
+      const left = Math.max(16, Math.min(window.innerWidth - barWidth - 16, rect.left + rect.width / 2 - barWidth / 2));
+      const top = Math.max(60, rect.top - 46);
+      zenSelectionBarEl.style.left = `${Math.round(left)}px`;
+      zenSelectionBarEl.style.top = `${Math.round(top)}px`;
+    }
+  }
+
+  function renderZenReader(opts = {}) {
+    if (state.zenReaderItemId === null || !zenReaderOverlayEl) return;
+    const item = findDrawerItem(state.zenReaderItemId);
+    if (!item) return;
+    const prevScrollTop = opts.preserveScroll && zenReaderScrollEl ? zenReaderScrollEl.scrollTop : null;
+
+    applyZenPrefsObject(zenPrefs, { syncCloud: false });
+    const fullText = getZenReadableText(item);
+    const readMin = estimateReadingMinutes(fullText);
+    const domain = buildItemDomainLabel(item);
+    const bylineParts = [];
+    if (shouldShowCreator(item)) bylineParts.push(`👤 ${escapeHtml(item.creator)}`);
+    if (domain) bylineParts.push(`🌐 ${escapeHtml(domain)}`);
+    if (readMin) bylineParts.push(`⏱ ~${readMin} мин чтения`);
+    const addedDate = formatAddedDate(item.created_at);
+    if (addedDate) bylineParts.push(escapeHtml(addedDate));
+
+    if (zenReaderTopTitleEl) zenReaderTopTitleEl.textContent = item.title_ru || "Чтение";
+    if (zenReaderReadMetaEl) {
+      zenReaderReadMetaEl.textContent = [domain, readMin ? `~${readMin} мин` : ""].filter(Boolean).join(" · ");
+    }
+
+    const srcUrl = getPrimarySourceUrl(item);
+    if (zenOpenSourceLinkEl) {
+      if (srcUrl) {
+        zenOpenSourceLinkEl.href = srcUrl;
+        zenOpenSourceLinkEl.classList.remove("hidden");
+      } else {
+        zenOpenSourceLinkEl.classList.add("hidden");
+      }
+    }
+
+    if (zenArticleHeadEl) {
+      zenArticleHeadEl.innerHTML = `
+        <h1 class="zen-article-title">${escapeHtml(item.title_ru || "Без названия")}</h1>
+        ${bylineParts.length ? `<div class="zen-article-byline">${bylineParts.join(" · ")}</div>` : ""}
+      `;
+    }
+
+    const highlights = getItemHighlights(item);
+    if (zenReaderContentEl) {
+      zenReaderContentEl.innerHTML = renderZenContentWithHighlights(fullText, highlights);
+    }
+
+    if (zenReaderHighlightsListEl) {
+      if (highlights.length) {
+        const cards = highlights
+          .map((hl, idx) => {
+            const hlText = typeof hl === "string" ? hl : String(hl.text || "");
+            const hlNote = typeof hl === "object" && hl && hl.note ? String(hl.note) : "";
+            const hlId = typeof hl === "object" && hl && hl.id ? String(hl.id) : `hl-${idx + 1}`;
+            return `
+              <div class="drawer-highlight-card">
+                <div class="drawer-hl-text">${escapeHtml(hlText)}</div>
+                ${hlNote ? `<div class="drawer-hl-note">💬 ${escapeHtml(hlNote)}</div>` : ""}
+                <div class="drawer-hl-actions">
+                  <button type="button" class="drawer-hl-mini-btn" data-zen-hl-copy="${escapeHtml(hlId)}">Копировать</button>
+                  <button type="button" class="drawer-hl-mini-btn danger" data-zen-hl-del="${escapeHtml(hlId)}">Удалить</button>
+                </div>
+              </div>
+            `;
+          })
+          .join("");
+        zenReaderHighlightsListEl.innerHTML = `
+          <div class="drawer-section-title">✨ Сохранённые цитаты (${highlights.length})</div>
+          ${cards}
+        `;
+        zenReaderHighlightsListEl.classList.remove("hidden");
+      } else {
+        zenReaderHighlightsListEl.innerHTML = "";
+        zenReaderHighlightsListEl.classList.add("hidden");
+      }
+    }
+
+    if (prevScrollTop !== null && zenReaderScrollEl) {
+      zenReaderScrollEl.scrollTop = prevScrollTop;
+    }
+  }
+
+  function computeCurrentZenScrollPct() {
+    if (!zenReaderScrollEl) return 0;
+    const maxScroll = Math.max(0, zenReaderScrollEl.scrollHeight - zenReaderScrollEl.clientHeight);
+    if (maxScroll <= 4) return 0;
+    return Math.max(0, Math.min(100, Math.round((zenReaderScrollEl.scrollTop / maxScroll) * 100)));
+  }
+
+  function openZenReader(itemId) {
+    const numId = Number(itemId);
+    const item = findDrawerItem(numId);
+    if (!item || !zenReaderOverlayEl) return;
+    state.zenReaderItemId = numId;
+    hideZenSelectionBar();
+    if (zenManualQuoteBoxEl) zenManualQuoteBoxEl.classList.add("hidden");
+    renderZenReader();
+    zenReaderOverlayEl.classList.remove("hidden");
+    zenReaderOverlayEl.setAttribute("aria-hidden", "false");
+    syncTelegramBackButton();
+
+    const meta = parseMeta(item.meta);
+    const metaScroll =
+      meta.progress && meta.progress.kind === "read" ? Number(meta.progress.scroll_pct || 0) : 0;
+    const savedPct = Math.max(metaScroll, getStoredZenScroll(numId));
+    zenOpenedScrollPct = savedPct;
+    if (zenReaderScrollEl) {
+      setTimeout(() => {
+        if (!zenReaderScrollEl) return;
+        const maxScroll = Math.max(0, zenReaderScrollEl.scrollHeight - zenReaderScrollEl.clientHeight);
+        zenReaderScrollEl.scrollTop = savedPct > 0 && maxScroll > 0 ? Math.round((savedPct / 100) * maxScroll) : 0;
+        if (zenProgressFillEl) {
+          const ratio = maxScroll > 0 ? zenReaderScrollEl.scrollTop / maxScroll : 0;
+          zenProgressFillEl.style.setProperty("--zen-progress", String(Math.max(0, Math.min(1, ratio))));
+        }
+      }, 20);
+    }
+    haptic("light");
+  }
+
+  function closeZenReader() {
+    if (state.zenReaderItemId === null || !zenReaderOverlayEl) return;
+    const closingId = state.zenReaderItemId;
+    const item = findDrawerItem(closingId);
+    const pct = computeCurrentZenScrollPct();
+    saveStoredZenScroll(closingId, pct);
+    hideZenSelectionBar();
+    state.zenReaderItemId = null;
+    zenReaderOverlayEl.classList.add("hidden");
+    zenReaderOverlayEl.setAttribute("aria-hidden", "true");
+    syncTelegramBackButton();
+
+    if (
+      item &&
+      ["article", "post"].includes(item.category) &&
+      pct >= 5 &&
+      Math.abs(pct - zenOpenedScrollPct) >= 5
+    ) {
+      patchItem(closingId, { progress: { kind: "read", scroll_pct: pct } }, { syncProgress: true });
+    }
+  }
+
+  if (zenReaderCloseBtnEl) {
+    zenReaderCloseBtnEl.addEventListener("click", closeZenReader);
+  }
+  if (zenFontDecBtnEl) {
+    zenFontDecBtnEl.addEventListener("click", () => {
+      applyZenPrefsObject({ ...zenPrefs, fontSize: Math.max(15, zenPrefs.fontSize - 1) });
+      haptic("selection");
+    });
+  }
+  if (zenFontIncBtnEl) {
+    zenFontIncBtnEl.addEventListener("click", () => {
+      applyZenPrefsObject({ ...zenPrefs, fontSize: Math.min(24, zenPrefs.fontSize + 1) });
+      haptic("selection");
+    });
+  }
+  if (zenWidthToggleBtnEl) {
+    zenWidthToggleBtnEl.addEventListener("click", () => {
+      const order = ["narrow", "medium", "wide"];
+      const nextWidth = order[(order.indexOf(zenPrefs.width) + 1) % order.length];
+      applyZenPrefsObject({ ...zenPrefs, width: nextWidth });
+      haptic("selection");
+    });
+  }
+  if (zenManualQuoteBtnEl && zenManualQuoteBoxEl) {
+    zenManualQuoteBtnEl.addEventListener("click", () => {
+      const selText = pendingSelectedQuoteText;
+      const isHidden = zenManualQuoteBoxEl.classList.contains("hidden");
+      zenManualQuoteBoxEl.classList.toggle("hidden", !isHidden);
+      if (isHidden && zenManualQuoteTextEl) {
+        if (selText && !zenManualQuoteTextEl.value.trim()) {
+          zenManualQuoteTextEl.value = selText;
+        }
+        setTimeout(() => zenManualQuoteTextEl.focus(), 20);
+      }
+    });
+  }
+  if (zenManualQuoteCancelBtnEl && zenManualQuoteBoxEl) {
+    zenManualQuoteCancelBtnEl.addEventListener("click", () => {
+      zenManualQuoteBoxEl.classList.add("hidden");
+    });
+  }
+  if (zenManualQuoteSaveBtnEl) {
+    zenManualQuoteSaveBtnEl.addEventListener("click", async () => {
+      if (state.zenReaderItemId === null) return;
+      const txt = zenManualQuoteTextEl ? zenManualQuoteTextEl.value.trim() : "";
+      const note = zenManualQuoteNoteEl ? zenManualQuoteNoteEl.value.trim() : "";
+      if (!txt) return;
+      if (zenManualQuoteTextEl) zenManualQuoteTextEl.value = "";
+      if (zenManualQuoteNoteEl) zenManualQuoteNoteEl.value = "";
+      if (zenManualQuoteBoxEl) zenManualQuoteBoxEl.classList.add("hidden");
+      await saveZenHighlight(state.zenReaderItemId, txt, note);
+    });
+  }
+  if (zenSaveSelectionBtnEl) {
+    zenSaveSelectionBtnEl.addEventListener("click", async () => {
+      const txt = pendingSelectedQuoteText;
+      const id = state.zenReaderItemId;
+      hideZenSelectionBar();
+      if (window.getSelection) {
+        try {
+          window.getSelection().removeAllRanges();
+        } catch {}
+      }
+      if (id !== null && txt) {
+        await saveZenHighlight(id, txt);
+      }
+    });
+  }
+  if (zenReaderScrollEl) {
+    zenReaderScrollEl.addEventListener(
+      "scroll",
+      () => {
+        if (state.zenReaderItemId === null) return;
+        hideZenSelectionBar();
+        const pct = computeCurrentZenScrollPct();
+        if (zenProgressFillEl) {
+          zenProgressFillEl.style.setProperty("--zen-progress", String(pct / 100));
+        }
+        saveStoredZenScroll(state.zenReaderItemId, pct);
+      },
+      { passive: true }
+    );
+  }
+  if (zenReaderHighlightsListEl) {
+    zenReaderHighlightsListEl.addEventListener("click", async (e) => {
+      if (state.zenReaderItemId === null) return;
+      const copyBtn = e.target.closest("[data-zen-hl-copy]");
+      if (copyBtn) {
+        const item = findDrawerItem(state.zenReaderItemId);
+        const hls = getItemHighlights(item);
+        const target = hls.find((h, idx) => String(h.id || `hl-${idx + 1}`) === copyBtn.dataset.zenHlCopy);
+        const txt = target ? (typeof target === "string" ? target : target.text || "") : "";
+        if (txt && navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(txt).catch(() => {});
+        }
+        showLiveToast("📋 Цитата скопирована", { durationMs: 2200 });
+        return;
+      }
+      const delBtn = e.target.closest("[data-zen-hl-del]");
+      if (delBtn) {
+        await deleteItemHighlight(state.zenReaderItemId, delBtn.dataset.zenHlDel);
+      }
+    });
+  }
+  document.addEventListener("selectionchange", () => {
+    if (state.zenReaderItemId !== null) {
+      updateZenSelectionBar();
+    }
+  });
+
   document.addEventListener("paste", (e) => {
     if (authModal && !authModal.classList.contains("hidden")) return;
     if (
+      state.zenReaderItemId !== null ||
       state.quickAddOpen ||
       state.cmdPaletteOpen ||
       state.shortcutsOpen ||
@@ -6134,6 +7200,7 @@
         if (window.innerWidth > 820 || ptrRefreshing || e.touches.length !== 1) return;
         if ((window.scrollY || 0) > 2 || openSwipeWrap) return;
         const anyOverlay =
+          state.zenReaderItemId !== null ||
           state.drawerItemId !== null ||
           state.filtersSheetOpen ||
           state.quickAddOpen ||

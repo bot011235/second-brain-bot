@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from app.utils.normalize import normalize_text
@@ -48,6 +49,100 @@ def _row_to_item(row: tuple[Any, ...] | None) -> dict[str, Any] | None:
     return dict(zip(ITEM_COLUMNS, row))
 
 
+def _parse_meta_dict(raw_meta: Any) -> dict[str, Any]:
+    if isinstance(raw_meta, dict):
+        return dict(raw_meta)
+    if isinstance(raw_meta, str) and raw_meta.strip():
+        try:
+            parsed = json.loads(raw_meta)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
+
+
+def _sanitize_highlights(raw_highlights: list[Any]) -> list[dict[str, Any]]:
+    if not isinstance(raw_highlights, list):
+        raise ValueError("Invalid highlights")
+    now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    cleaned: list[dict[str, Any]] = []
+    for entry in raw_highlights[:100]:
+        if isinstance(entry, str):
+            raw_text = entry
+            raw_note = ""
+            raw_id = ""
+            raw_created = ""
+        elif isinstance(entry, dict):
+            raw_text = str(entry.get("text") or "")
+            raw_note = str(entry.get("note") or "")
+            raw_id = str(entry.get("id") or "").strip()
+            raw_created = str(entry.get("created_at") or "").strip()
+        else:
+            continue
+        text = raw_text.strip()[:4000]
+        if not text:
+            continue
+        note = raw_note.strip()[:1000]
+        hl: dict[str, Any] = {
+            "id": raw_id or f"hl-{len(cleaned) + 1}",
+            "text": text,
+            "created_at": raw_created or now_iso,
+        }
+        if note:
+            hl["note"] = note
+        cleaned.append(hl)
+    return cleaned
+
+
+def _sanitize_progress(raw_progress: Any) -> dict[str, Any] | None:
+    if not isinstance(raw_progress, dict):
+        raise ValueError("Invalid progress")
+    if not raw_progress or raw_progress.get("clear") is True:
+        return None
+    kind = str(raw_progress.get("kind") or "").strip().lower()
+    if kind not in ("series", "book", "read"):
+        raise ValueError("Invalid progress kind")
+    now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    try:
+        if kind == "series":
+            season = max(1, min(999, int(raw_progress.get("season") or 1)))
+            episode = max(0, min(9999, int(raw_progress.get("episode") or 0)))
+            res: dict[str, Any] = {
+                "kind": "series",
+                "season": season,
+                "episode": episode,
+                "updated_at": now_iso,
+            }
+            total_seasons = raw_progress.get("total_seasons")
+            if total_seasons is not None and int(total_seasons) > 0:
+                res["total_seasons"] = min(999, int(total_seasons))
+            return res
+        if kind == "book":
+            page = max(0, min(99999, int(raw_progress.get("page") or 0)))
+            total_pages = max(0, min(99999, int(raw_progress.get("total_pages") or 0)))
+            percent = (
+                min(100, round(page * 100 / total_pages))
+                if total_pages > 0
+                else max(0, min(100, int(raw_progress.get("percent") or 0)))
+            )
+            return {
+                "kind": "book",
+                "page": page,
+                "total_pages": total_pages,
+                "percent": percent,
+                "updated_at": now_iso,
+            }
+        scroll_pct = max(0, min(100, int(raw_progress.get("scroll_pct") or 0)))
+        return {
+            "kind": "read",
+            "scroll_pct": scroll_pct,
+            "updated_at": now_iso,
+        }
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid progress value") from exc
+
+
 def mark_update_processed(conn: Any, update_id: int) -> bool:
     """Возвращает True, если update_id ещё не обрабатывался (и помечает его обработанным)."""
     cur = conn.execute("SELECT 1 FROM processed_updates WHERE update_id = ?", (update_id,))
@@ -76,13 +171,18 @@ def sync_item_fts(conn: Any, item_id: int) -> None:
 
     sources_cur = conn.execute("SELECT raw_text FROM item_sources WHERE item_id = ?", (item_id,))
     sources_parts = [r[0] for r in sources_cur.fetchall() if r[0]]
-    if raw_meta:
-        try:
-            meta_obj = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
-            if isinstance(meta_obj, dict) and meta_obj.get("user_note"):
-                sources_parts.append(str(meta_obj["user_note"]))
-        except Exception:
-            pass
+    meta_obj = _parse_meta_dict(raw_meta)
+    if meta_obj.get("user_note"):
+        sources_parts.append(str(meta_obj["user_note"]))
+    if isinstance(meta_obj.get("highlights"), list):
+        for hl in meta_obj["highlights"]:
+            if isinstance(hl, dict):
+                if hl.get("text"):
+                    sources_parts.append(str(hl["text"]))
+                if hl.get("note"):
+                    sources_parts.append(str(hl["note"]))
+            elif isinstance(hl, str) and hl.strip():
+                sources_parts.append(hl.strip())
     sources_str = " ".join(sources_parts)
 
     conn.execute(
@@ -351,17 +451,49 @@ def update_item_enriched(
     kp_id: int | None = None,
     google_books_id: str | None = None,
     isbn13: str | None = None,
+    canonical_url: str | None = None,
     rating_imdb: float | None = None,
     rating_kp: float | None = None,
     rating_rt: int | None = None,
     url_rt: str | None = None,
     genres: list[str] | None = None,
+    tags: list[str] | None = None,
     meta: dict[str, Any] | None = None,
     processing_status: str = "ok",
+    preserve_user_meta: bool = True,
 ) -> dict[str, Any] | None:
+    cur_row = conn.execute(
+        "SELECT imdb_id, kp_id, google_books_id, canonical_url, meta FROM items WHERE id = ?",
+        (item_id,),
+    ).fetchone()
+    if cur_row is None:
+        return None
+    prev_imdb, prev_kp, prev_gb, prev_canonical, prev_raw_meta = cur_row
+
+    def _safe_unique(col: str, candidate_val: Any, fallback_val: Any) -> Any:
+        if candidate_val is None or candidate_val == "":
+            return fallback_val
+        clash = conn.execute(
+            f"SELECT id FROM items WHERE {col} = ? AND id <> ? LIMIT 1",
+            (candidate_val, item_id),
+        ).fetchone()
+        return fallback_val if clash else candidate_val
+
+    safe_imdb = _safe_unique("imdb_id", imdb_id, prev_imdb) if imdb_id is not None else imdb_id
+    safe_kp = _safe_unique("kp_id", kp_id, prev_kp) if kp_id is not None else kp_id
+    safe_gb = _safe_unique("google_books_id", google_books_id, prev_gb) if google_books_id is not None else google_books_id
+    safe_canonical = _safe_unique("canonical_url", canonical_url, prev_canonical) if canonical_url is not None else prev_canonical
+
+    merged_meta = dict(meta) if isinstance(meta, dict) else {}
+    if preserve_user_meta:
+        prev_meta = _parse_meta_dict(prev_raw_meta)
+        for key in ("user_note", "highlights", "progress"):
+            if key in prev_meta and key not in merged_meta:
+                merged_meta[key] = prev_meta[key]
+
     norm_title = normalize_text(title_ru or title_orig or "") or "untitled"
     norm_creator = normalize_text(creator) if creator else None
-    meta_json = json.dumps(meta, ensure_ascii=False) if meta else None
+    meta_json = json.dumps(merged_meta, ensure_ascii=False) if merged_meta else None
 
     conn.execute(
         """
@@ -379,6 +511,7 @@ def update_item_enriched(
             kp_id = ?,
             google_books_id = ?,
             isbn13 = ?,
+            canonical_url = ?,
             rating_imdb = ?,
             rating_kp = ?,
             rating_rt = ?,
@@ -397,10 +530,11 @@ def update_item_enriched(
             release_year,
             creator,
             norm_creator,
-            imdb_id,
-            kp_id,
-            google_books_id,
+            safe_imdb,
+            safe_kp,
+            safe_gb,
             isbn13,
+            safe_canonical,
             rating_imdb,
             rating_kp,
             rating_rt,
@@ -411,10 +545,74 @@ def update_item_enriched(
             item_id,
         ),
     )
-    set_item_tags(conn, item_id, genres=genres, commit=False)
+    set_item_tags(conn, item_id, genres=genres, tags=tags, commit=False)
     conn.commit()
     sync_item_fts(conn, item_id)
     return get_item(conn, item_id)
+
+
+def upsert_extracted_text_for_item(
+    conn: Any,
+    item: dict[str, Any],
+    *,
+    extracted_text: str,
+    source_url: str | None = None,
+    author: str | None = None,
+) -> None:
+    """Обновляет или добавляет извлечённый текст источника в original_messages для карточки."""
+    clean_text = (extracted_text or "").strip()
+    if not clean_text:
+        return
+    clauses: list[str] = []
+    params: list[Any] = []
+    eff_url = source_url or item.get("canonical_url")
+    if eff_url:
+        clauses.append("source_url = ?")
+        params.append(eff_url)
+    if item.get("tg_message_id") is not None:
+        clauses.append("tg_message_id = ?")
+        params.append(int(item["tg_message_id"]))
+    if clauses:
+        row = conn.execute(
+            f"SELECT id FROM original_messages WHERE {' OR '.join(clauses)} ORDER BY id DESC LIMIT 1",
+            params,
+        ).fetchone()
+        if row:
+            if author:
+                conn.execute(
+                    "UPDATE original_messages SET extracted_text = ?, author = COALESCE(NULLIF(author, ''), ?) WHERE id = ?",
+                    (clean_text, author, int(row[0])),
+                )
+            else:
+                conn.execute(
+                    "UPDATE original_messages SET extracted_text = ? WHERE id = ?",
+                    (clean_text, int(row[0])),
+                )
+            conn.commit()
+            return
+    cat = (item.get("category") or "").lower()
+    slug = (
+        "movies"
+        if cat in ("movie", "series")
+        else "books"
+        if cat == "book"
+        else "video"
+        if cat == "video"
+        else "article"
+        if cat == "article"
+        else "ideas"
+    )
+    create_original_message(
+        conn,
+        topic_slug=slug,
+        raw_text=item.get("raw_input") or item.get("canonical_url") or item.get("title_ru") or "",
+        tg_topic_id=item.get("tg_topic_id"),
+        tg_message_id=item.get("tg_message_id"),
+        source_url=eff_url,
+        source_type="web",
+        author=author or item.get("creator"),
+        extracted_text=clean_text,
+    )
 
 
 def get_item(conn: Any, item_id: int) -> dict[str, Any] | None:
@@ -516,12 +714,43 @@ def update_item_fields(
     summary: str | None = None,
     user_note: str | None = None,
     tags: list[str] | None = None,
+    highlights: list[dict[str, Any]] | None = None,
+    progress: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     cur_item = get_item(conn, item_id)
     if not cur_item:
         return None
 
     fts_dirty = False
+    meta_dict = _parse_meta_dict(cur_item.get("meta"))
+    meta_dirty = False
+
+    if user_note is not None:
+        clean_note = user_note.strip()
+        if clean_note:
+            meta_dict["user_note"] = clean_note
+        else:
+            meta_dict.pop("user_note", None)
+        meta_dirty = True
+        fts_dirty = True
+
+    if highlights is not None:
+        cleaned_hl = _sanitize_highlights(highlights)
+        if cleaned_hl:
+            meta_dict["highlights"] = cleaned_hl
+        else:
+            meta_dict.pop("highlights", None)
+        meta_dirty = True
+        fts_dirty = True
+
+    if progress is not None:
+        cleaned_prog = _sanitize_progress(progress)
+        if cleaned_prog is not None:
+            meta_dict["progress"] = cleaned_prog
+        else:
+            meta_dict.pop("progress", None)
+        meta_dirty = True
+
     if status is not None:
         conn.execute("UPDATE items SET status = ? WHERE id = ?", (status, item_id))
     if user_rating is not None:
@@ -539,26 +768,9 @@ def update_item_fields(
         clean_summary = summary.strip() or None
         conn.execute("UPDATE items SET summary = ? WHERE id = ?", (clean_summary, item_id))
         fts_dirty = True
-    if user_note is not None:
-        raw_meta = cur_item.get("meta")
-        meta_dict: dict[str, Any] = {}
-        if isinstance(raw_meta, dict):
-            meta_dict = dict(raw_meta)
-        elif isinstance(raw_meta, str) and raw_meta.strip():
-            try:
-                parsed = json.loads(raw_meta)
-                if isinstance(parsed, dict):
-                    meta_dict = parsed
-            except Exception:
-                meta_dict = {}
-        clean_note = user_note.strip()
-        if clean_note:
-            meta_dict["user_note"] = clean_note
-        else:
-            meta_dict.pop("user_note", None)
+    if meta_dirty:
         meta_json = json.dumps(meta_dict, ensure_ascii=False) if meta_dict else None
         conn.execute("UPDATE items SET meta = ? WHERE id = ?", (meta_json, item_id))
-        fts_dirty = True
     if tags is not None:
         set_item_tags(conn, item_id, tags=tags, commit=False)
         fts_dirty = True
@@ -617,7 +829,7 @@ def _build_catalog_where(
     elif smart == "favorites":
         where_clauses.append("COALESCE(i.user_rating, 0) >= 8")
     elif smart == "noted":
-        where_clauses.append("i.meta LIKE '%\"user_note\"%'")
+        where_clauses.append('(i.meta LIKE \'%"user_note"%\' OR i.meta LIKE \'%"highlights"%\')')
     elif smart == "unrated_done":
         where_clauses.append("i.status = 'done' AND i.user_rating IS NULL")
     elif smart == "attention":

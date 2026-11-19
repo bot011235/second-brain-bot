@@ -43,6 +43,21 @@
 
 ## 3. Хронология изменений (Лог правок по всем чатам)
 
+### 2026-11-19 (v32) — Этап 6 UI/UX: Полноэкранный Zen Reader + Цитаты/Хайлайты (FTS5), Трекер прогресса сериалов/книг и кнопка «Переобогатить» (`app/db/repo.py`, `app/bot/handlers.py`, `app/main.py`, `app/tma/`, `tests/test_stage6_tma.py`)
+- **Полноэкранный режим чтения Zen Reader + Цитаты и хайлайты (`app/tma/index.html`, `app/tma/styles.css`, `app/tma/app.js`, `app/db/repo.py`)**:
+  - Добавлен полноэкранный ридер `#zenReaderOverlay` с настройкой размера шрифта (`A− / A+`, `15–24px`), ширины колонки (`narrow / medium / wide`, сохраняется в `localStorage` и `tg.CloudStorage`), **CSS Scroll-Driven Reading Progress Bar** (`animation-timeline: scroll()`, `--zen-scroll` + JS-фолбэк) и автосохранением позиции чтения (`meta.progress` `kind="read"` + `localStorage`).
+  - Выделение текста в Zen Reader показывает плавающий тулбар `#zenSelectionBar` («✨ Сохранить цитату», на мобильных закрепляется снизу поверх системного меню); также добавлена ручная форма добавления цитаты с комментарием в Zen Reader и в Detail Drawer (`buildDrawerHighlightsHtml`).
+  - Сохранённые цитаты хранятся в `meta.highlights` без SQL-миграций, подсвечиваются `<mark class="zen-highlight">` внутри текста ридера, автоматически **индексируются в `items_fts` (`FTS5`)** в `sync_item_fts` и попадают в умный список `✍️ С заметками` (`smart="noted"`).
+  - Горячая клавиша `R` в Detail Drawer открывает Zen Reader, `Esc` и `Telegram.WebApp.BackButton` закрывают ридер обратно в карточку.
+- **Трекер прогресса сериалов и книг (`app/db/repo.py`, `app/tma/app.js`, `app/tma/styles.css`)**:
+  - В Detail Drawer добавлен блок `#drawerProgressSlot` (`buildDrawerProgressHtml`): для сериалов — степпер `−1` / `+1 серия` / `+1 сезон` и поля `С / Э` (`С2 · Э5`); для книг — ползунок прогресса, поля `Стр. / из`, быстрые кнопки `+10` / `+25` и кнопка `✅ Отметить «Готово»` при достижении 100%.
+  - При первом шаге прогресса (`episode > 0` или `page > 0`) статус записи из `inbox`/`planned` автоматически переключается в `in_progress`.
+  - На карточках каталога (Постеры, Сетка, Список, Канбан) отображаются компактные бейджи прогресса (`С2·Э5`, `50%`), полоска `.poster-progress-bar` внизу постера и индикатор количества цитат `✨ N`.
+- **Кнопка «🔄 Переобогатить» (`POST /api/items/{id}/reenrich`, `app/bot/handlers.py`, `app/main.py`, `app/db/repo.py`, `app/tma/app.js`)**:
+  - Реализована функция `reenrich_item` и эндпоинт `POST /api/items/{item_id}/reenrich` для повторного получения постера, рейтингов (IMDb/КП/RT/FantLab/Goodreads), описания, тегов и полного текста статьи/поста (`upsert_extracted_text_for_item`) с гарантированным сохранением пользовательских данных (`status`, `user_rating`, `user_note`, `highlights`, `progress`, ручных тегов) и защитой от конфликтов `UNIQUE`-полей (`imdb_id`, `kp_id`, `google_books_id`, `canonical_url`).
+  - В Detail Drawer добавлен баннер `.drawer-attention-banner` для записей со статусом `processing_status <> 'ok'` и кнопка `🔄 Переобогатить` в футере карточки с живым тостом списка обновлённых полей.
+- **Кэш и тесты (`app/tma/index.html`, `app/tma/sw.js`, `tests/test_stage6_tma.py`)**: версии ассетов и Service Worker обновлены до `v32` (`notes-shell-v32`), добавлен интеграционный тест `test_stage6_highlights_progress_and_reenrich` и расширен `test_tma_static_ui_contract`.
+
 ### 2026-11-19 (v31) — Плавный Hero View Transition при открытии и закрытии детальной карточки (`app/tma/styles.css`, `app/tma/app.js`, `app/tma/index.html`, `app/tma/sw.js`, `tests/test_stage6_tma.py`)
 - **Устранён конфликт анимаций при Hero-переходе (`app/tma/styles.css`, `app/tma/app.js`)**:
   - На время активного View Transition добавлен класс `html.vt-drawer-active`, который отключает CSS `animation` у `.detail-drawer` и выделяет саму панель в отдельный слой `view-transition-name: detail-drawer-panel` с плавными кривыми `vtDrawerInDesktop` / `vtDrawerOutDesktop` и `vtDrawerInMobile` / `vtDrawerOutMobile`.

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Notes</title>
-  <link rel="manifest" href="./manifest.webmanifest?v=31" />
+  <link rel="manifest" href="./manifest.webmanifest?v=32" />
   <meta name="theme-color" content="#fbf8f3" id="metaThemeColor" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,600..700;1,7..72,400&display=swap" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=31" />
+  <link rel="stylesheet" href="./styles.css?v=32" />
 </head>
 <body>
   <div class="app-shell">
@@ -411,6 +411,7 @@
           <div class="shortcut-row"><span>Вернуть во Входящие</span><kbd class="kbd-hint">0</kbd></div>
           <div class="shortcut-row"><span>Редактировать название/описание</span><kbd class="kbd-hint">E</kbd></div>
           <div class="shortcut-row"><span>Перейти к заметке</span><kbd class="kbd-hint">M</kbd></div>
+          <div class="shortcut-row"><span>Режим чтения (Zen Reader)</span><kbd class="kbd-hint">R</kbd></div>
           <div class="shortcut-row"><span>Пропустить в триаже</span><kbd class="kbd-hint">S</kbd></div>
           <div class="shortcut-row"><span>Закрыть шторку</span><kbd class="kbd-hint">Esc</kbd></div>
         </div>
@@ -422,6 +423,47 @@
   <div id="posterLightbox" class="lightbox-overlay hidden" aria-hidden="true">
     <button type="button" class="lightbox-close" id="lightboxCloseBtn" aria-label="Закрыть">✕</button>
     <img id="lightboxImg" class="lightbox-img" src="" alt="" />
+  </div>
+
+  <!-- Полноэкранный режим чтения (Zen Reader + Цитаты/Хайлайты) -->
+  <div id="zenReaderOverlay" class="zen-reader-overlay hidden" role="dialog" aria-modal="true" aria-label="Режим чтения" aria-hidden="true">
+    <header class="zen-reader-topbar">
+      <div class="zen-topbar-left">
+        <button type="button" class="icon-btn" id="zenReaderCloseBtn" title="Закрыть (Esc)" aria-label="Закрыть режим чтения">←</button>
+        <div class="zen-topbar-meta">
+          <div class="zen-topbar-title" id="zenReaderTopTitle">Чтение</div>
+          <div class="zen-topbar-sub" id="zenReaderReadMeta"></div>
+        </div>
+      </div>
+      <div class="zen-topbar-controls">
+        <button type="button" class="zen-ctrl-btn" id="zenFontDecBtn" title="Уменьшить шрифт" aria-label="Уменьшить шрифт">A−</button>
+        <button type="button" class="zen-ctrl-btn" id="zenFontIncBtn" title="Увеличить шрифт" aria-label="Увеличить шрифт">A+</button>
+        <button type="button" class="zen-ctrl-btn" id="zenWidthToggleBtn" title="Ширина колонки" aria-label="Ширина колонки">↔</button>
+        <button type="button" class="zen-ctrl-btn zen-quote-add-btn" id="zenManualQuoteBtn" title="Сохранить цитату">✨ Цитата</button>
+        <a id="zenOpenSourceLink" class="zen-ctrl-btn hidden" href="#" target="_blank" rel="noopener noreferrer" title="Открыть оригинал">↗</a>
+      </div>
+      <div class="zen-progress-track" aria-hidden="true">
+        <div class="zen-progress-fill" id="zenProgressFill"></div>
+      </div>
+    </header>
+    <div id="zenReaderScroll" class="zen-reader-scroll">
+      <article id="zenReaderArticle" class="zen-reader-article width-medium">
+        <div class="zen-article-head" id="zenArticleHead"></div>
+        <div id="zenManualQuoteBox" class="zen-manual-quote-box hidden">
+          <textarea id="zenManualQuoteText" class="drawer-note-textarea" rows="3" placeholder="Вставьте или напишите цитату..."></textarea>
+          <input type="text" id="zenManualQuoteNote" class="drawer-edit-input" placeholder="Короткий комментарий (необязательно)" />
+          <div class="drawer-note-footer">
+            <button type="button" class="confirm-cancel-btn" id="zenManualQuoteCancelBtn">Отмена</button>
+            <button type="button" class="liquid-pill drawer-save-note-btn" id="zenManualQuoteSaveBtn">Сохранить цитату</button>
+          </div>
+        </div>
+        <div id="zenReaderContent" class="zen-reader-content"></div>
+        <section id="zenReaderHighlightsList" class="zen-highlights-section hidden"></section>
+      </article>
+    </div>
+    <div id="zenSelectionBar" class="zen-selection-bar hidden" role="toolbar" aria-label="Действия с выделением">
+      <button type="button" class="zen-selection-btn" id="zenSaveSelectionBtn">✨ Сохранить цитату</button>
+    </div>
   </div>
 
   <!-- Глобальный оверлей перетаскивания ссылок и заметок -->
@@ -466,6 +508,6 @@
     <button type="button" id="undoToastBtn" class="undo-toast-btn">Отменить</button>
   </div>
 
-  <script src="./app.js?v=31"></script>
+  <script src="./app.js?v=32"></script>
 </body>
 </html>

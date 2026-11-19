@@ -728,6 +728,211 @@ class TestStage6TMA(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_stage6_highlights_progress_and_reenrich(self) -> None:
+        from unittest.mock import patch
+        from fastapi import HTTPException
+        import app.main as main_mod
+        from app.bot import handlers as handlers_mod
+        from app.pipeline import movies as movies_pipeline
+
+        class _NoCloseConn:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+            def close(self) -> None:
+                pass
+
+        class _DummyLLM:
+            is_configured = False
+
+        conn = get_connection(":memory:")
+        apply_migrations(conn)
+        try:
+            it_art = repo.create_item(
+                conn,
+                category="article",
+                title_ru="Длинная статья о нейробиологии",
+                canonical_url="https://example.com/neuro-article",
+                source_url="https://example.com/neuro-article",
+                source_type="web",
+                processing_status="needs_input",
+                tags=["наука"],
+            )
+            it_series = repo.create_item(
+                conn,
+                category="series",
+                title_ru="Разделение",
+                release_year=2022,
+                meta={"seasons_count": 2},
+            )
+            it_book = repo.create_item(
+                conn,
+                category="book",
+                title_ru="Дюна",
+                creator="Фрэнк Герберт",
+                meta={"page_count": 600},
+            )
+            it_existing_movie = repo.create_item(
+                conn,
+                category="movie",
+                title_ru="Прибытие (дубль ID)",
+                release_year=2016,
+                imdb_id="tt2543164",
+                kp_id=718811,
+            )
+            it_movie = repo.create_item(
+                conn,
+                category="movie",
+                title_ru="Прибытие",
+                release_year=2016,
+                status="in_progress",
+                processing_status="needs_input",
+                tags=["любимое"],
+                meta={"user_note": "Смотреть в оригинале"},
+            )
+            repo.update_item_fields(conn, it_movie["id"], user_rating=9)
+
+            wrapped = _NoCloseConn(conn)
+            with patch.object(main_mod, "get_connection", return_value=wrapped):
+                # 1. Сохранение цитат/хайлайтов + индексация в FTS5 и умном списке smart="noted"
+                patched_art = main_mod.api_patch_item(
+                    it_art["id"],
+                    main_mod.PatchItemPayload(
+                        highlights=[
+                            {"id": "hl-1", "text": "Синаптическая пластичность усиливается при глубоком сне", "note": "Важный тезис"},
+                        ],
+                        progress={"kind": "read", "scroll_pct": 65},
+                    ),
+                    _user={"id": 349407845},
+                )
+                art_meta = json.loads(patched_art["meta"])
+                self.assertEqual(len(art_meta["highlights"]), 1)
+                self.assertEqual(art_meta["highlights"][0]["note"], "Важный тезис")
+                self.assertEqual(art_meta["progress"]["kind"], "read")
+                self.assertEqual(art_meta["progress"]["scroll_pct"], 65)
+
+                fts_hits = repo.list_items_catalog(conn, q="Синаптическая")
+                self.assertEqual([x["id"] for x in fts_hits], [it_art["id"]])
+
+                noted_hits = repo.list_items_catalog(conn, smart="noted")
+                self.assertIn(it_art["id"], {x["id"] for x in noted_hits})
+
+                # Очистка хайлайтов удаляет их из meta и FTS5
+                cleared_art = main_mod.api_patch_item(
+                    it_art["id"],
+                    main_mod.PatchItemPayload(highlights=[]),
+                    _user={"id": 349407845},
+                )
+                self.assertNotIn("highlights", json.loads(cleared_art["meta"]))
+                self.assertEqual(repo.list_items_catalog(conn, q="Синаптическая"), [])
+
+                # 2. Прогресс сериалов и книг + валидация ошибок
+                patched_ser = main_mod.api_patch_item(
+                    it_series["id"],
+                    main_mod.PatchItemPayload(progress={"kind": "series", "season": 2, "episode": 5, "total_seasons": 2}),
+                    _user={"id": 349407845},
+                )
+                ser_prog = json.loads(patched_ser["meta"])["progress"]
+                self.assertEqual((ser_prog["season"], ser_prog["episode"]), (2, 5))
+
+                patched_book = main_mod.api_patch_item(
+                    it_book["id"],
+                    main_mod.PatchItemPayload(progress={"kind": "book", "page": 150, "total_pages": 600}),
+                    _user={"id": 349407845},
+                )
+                book_prog = json.loads(patched_book["meta"])["progress"]
+                self.assertEqual((book_prog["page"], book_prog["total_pages"], book_prog["percent"]), (150, 600, 25))
+
+                cleared_book = main_mod.api_patch_item(
+                    it_book["id"],
+                    main_mod.PatchItemPayload(progress={}),
+                    _user={"id": 349407845},
+                )
+                self.assertNotIn("progress", json.loads(cleared_book["meta"]))
+
+                with self.assertRaises(HTTPException) as ctx:
+                    main_mod.api_patch_item(
+                        it_book["id"],
+                        main_mod.PatchItemPayload(progress={"kind": "unknown_kind"}),
+                        _user={"id": 349407845},
+                    )
+                self.assertEqual(ctx.exception.status_code, 400)
+
+                # 3. Переобогащение фильма с сохранением пользовательских данных и защитой от UNIQUE-коллизий
+                main_mod.api_patch_item(
+                    it_movie["id"],
+                    main_mod.PatchItemPayload(
+                        highlights=[{"id": "hl-m", "text": "Любимая цитата из фильма"}],
+                    ),
+                    _user={"id": 349407845},
+                )
+                fake_enriched_movie = {
+                    "category": "movie",
+                    "title_ru": "Прибытие",
+                    "title_orig": "Arrival",
+                    "release_year": 2016,
+                    "creator": "Дени Вильнёв",
+                    "summary": "Лингвист пытается расшифровать язык пришельцев.",
+                    "poster_url": "https://image.tmdb.org/t/p/w500/arrival.jpg",
+                    "imdb_id": it_existing_movie["imdb_id"],  # коллизия UNIQUE с другой записью!
+                    "kp_id": it_existing_movie["kp_id"],      # коллизия UNIQUE с другой записью!
+                    "rating_imdb": 7.9,
+                    "rating_kp": 7.6,
+                    "rating_rt": 94,
+                    "url_rt": "https://www.rottentomatoes.com/m/arrival_2016",
+                    "genres": ["фантастика", "драма"],
+                    "meta": {"tmdb_id": 329865, "rating_tmdb": 7.6},
+                }
+                with patch.object(movies_pipeline, "search_movie_candidates", return_value=[{"tmdb_id": 329865}]), patch.object(
+                    movies_pipeline, "enrich_candidate", return_value=fake_enriched_movie
+                ):
+                    re_res = main_mod.api_reenrich_item(it_movie["id"], _user={"id": 349407845})
+                    self.assertEqual(re_res["status"], "updated")
+                    self.assertIn("poster_url", re_res["updated_fields"])
+                    self.assertIn("rating_imdb", re_res["updated_fields"])
+                    re_item = re_res["item"]
+                    self.assertEqual(re_item["processing_status"], "ok")
+                    self.assertEqual(re_item["status"], "in_progress")
+                    self.assertEqual(re_item["user_rating"], 9)
+                    self.assertIn("любимое", re_item["tags"])
+                    re_meta = json.loads(re_item["meta"])
+                    self.assertEqual(re_meta["user_note"], "Смотреть в оригинале")
+                    self.assertEqual(re_meta["highlights"][0]["text"], "Любимая цитата из фильма")
+                    self.assertEqual(re_meta["tmdb_id"], 329865)
+
+                # 4. Переобогащение статьи обновляет extracted_text, постер и статус
+                fake_scraped = {
+                    "ok": True,
+                    "canonical_url": "https://example.com/neuro-article",
+                    "title": "Длинная статья о нейробиологии",
+                    "text": "Полный текст статьи из трёх абзацев для чтения в Zen Reader.",
+                    "author": "Д-р Смит",
+                    "poster_url": "https://example.com/neuro.jpg",
+                }
+                art_re = handlers_mod.reenrich_item(
+                    conn,
+                    it_art["id"],
+                    llm_client=_DummyLLM(),
+                    scrape_fn=lambda _u: fake_scraped,
+                )
+                self.assertEqual(art_re["status"], "updated")
+                self.assertEqual(art_re["item"]["processing_status"], "ok")
+                self.assertEqual(art_re["item"]["poster_url"], "https://example.com/neuro.jpg")
+                self.assertEqual(
+                    art_re["item"]["extracted_text"],
+                    "Полный текст статьи из трёх абзацев для чтения в Zen Reader.",
+                )
+                self.assertEqual(json.loads(art_re["item"]["meta"])["progress"]["scroll_pct"], 65)
+
+                with self.assertRaises(HTTPException) as ctx404:
+                    main_mod.api_reenrich_item(999999, _user={"id": 349407845})
+                self.assertEqual(ctx404.exception.status_code, 404)
+        finally:
+            conn.close()
+
     def test_tma_static_ui_contract(self) -> None:
         import mimetypes
         import re
@@ -739,10 +944,10 @@ class TestStage6TMA(unittest.TestCase):
         css = (tma_dir / "styles.css").read_text(encoding="utf-8")
         js = (tma_dir / "app.js").read_text(encoding="utf-8")
 
-        # 1. Версия ассетов v31, PWA-манифест + иконки + Service Worker, Literata
-        self.assertIn("./styles.css?v=31", html)
-        self.assertIn("./app.js?v=31", html)
-        self.assertIn("./manifest.webmanifest?v=31", html)
+        # 1. Версия ассетов v32, PWA-манифест + иконки + Service Worker, Literata
+        self.assertIn("./styles.css?v=32", html)
+        self.assertIn("./app.js?v=32", html)
+        self.assertIn("./manifest.webmanifest?v=32", html)
         self.assertEqual(mimetypes.guess_type("manifest.webmanifest")[0], "application/manifest+json")
         self.assertIn("Literata", html)
         self.assertIn('data-mode="posters"', html)
@@ -752,13 +957,13 @@ class TestStage6TMA(unittest.TestCase):
 
         for fname in ("manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
             self.assertTrue((tma_dir / fname).is_file(), f"Missing PWA asset: {fname}")
-        self.assertIn("notes-shell-v31", (tma_dir / "sw.js").read_text(encoding="utf-8"))
+        self.assertIn("notes-shell-v32", (tma_dir / "sw.js").read_text(encoding="utf-8"))
         self.assertTrue((tma_dir / "icon-192.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertTrue((tma_dir / "icon-512.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         manifest = json.loads((tma_dir / "manifest.webmanifest").read_text(encoding="utf-8"))
         self.assertEqual(manifest["share_target"]["params"]["url"], "share_url")
 
-        # 2. Ключевые элементы и стили Этапов 1–5 (v26–v30)
+        # 2. Ключевые элементы и стили Этапов 1–6 (v26–v32)
         for token in (
             'id="ratingPopover"',
             'id="emptyStateActions"',
@@ -783,6 +988,16 @@ class TestStage6TMA(unittest.TestCase):
             'value="updated"',
             'value="year"',
             'value="title"',
+            'id="zenReaderOverlay"',
+            'id="zenReaderScroll"',
+            'id="zenReaderContent"',
+            'id="zenProgressFill"',
+            'id="zenSelectionBar"',
+            'id="zenSaveSelectionBtn"',
+            'id="zenFontDecBtn"',
+            'id="zenFontIncBtn"',
+            'id="zenWidthToggleBtn"',
+            'id="zenManualQuoteBtn"',
         ):
             self.assertIn(token, html)
 
@@ -829,6 +1044,14 @@ class TestStage6TMA(unittest.TestCase):
             "detail-drawer-panel",
             "vt-source-card",
             "vt-handled",
+            "zen-reader-overlay",
+            "zen-progress-fill",
+            "animation-timeline",
+            "zen-highlight",
+            "drawer-progress-card",
+            "poster-progress-bar",
+            "drawer-highlight-card",
+            "drawer-attention-banner",
         ):
             self.assertIn(token, css)
 
@@ -878,6 +1101,13 @@ class TestStage6TMA(unittest.TestCase):
             "findCatalogPosterEl",
             "clearActiveHeroTransition",
             'decoding="sync"',
+            "openZenReader",
+            "closeZenReader",
+            "saveZenHighlight",
+            "buildDrawerProgressHtml",
+            "buildDrawerHighlightsHtml",
+            "reenrichItemInDrawer",
+            "getItemProgressSummary",
         ):
             self.assertIn(token, js)
 

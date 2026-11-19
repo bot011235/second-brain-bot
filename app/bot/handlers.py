@@ -812,3 +812,332 @@ def ingest_web_item(
         override_topic_name=topic_name,
         auto_pick_first=True,
     )
+
+
+def reenrich_item(
+    conn: Any,
+    item_id: int,
+    *,
+    tmdb: TMDBClient | None = None,
+    books_client: BooksClient | None = None,
+    youtube_client: YouTubeClient | None = None,
+    llm_client: GroqLLMClient | None = None,
+    scrape_fn: Any = None,
+) -> dict[str, Any]:
+    """Повторно обогащает существующую запись (постер, рейтинги, описание, полный текст) с сохранением пользовательских заметок и статуса."""
+    item = repo.get_item(conn, item_id)
+    if not item:
+        return {"status": "not_found"}
+
+    def _snapshot(it: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "title_ru": it.get("title_ru"),
+            "summary": it.get("summary"),
+            "poster_url": it.get("poster_url"),
+            "rating_imdb": it.get("rating_imdb"),
+            "rating_kp": it.get("rating_kp"),
+            "rating_rt": it.get("rating_rt"),
+            "release_year": it.get("release_year"),
+            "creator": it.get("creator"),
+            "genres": list(it.get("genres") or []),
+            "tags": list(it.get("tags") or []),
+            "processing_status": it.get("processing_status"),
+            "extracted_text": it.get("extracted_text"),
+        }
+
+    before = _snapshot(item)
+    meta_before = repo._parse_meta_dict(item.get("meta"))
+    existing_tags = list(item.get("tags") or [])
+    cat = (item.get("category") or "idea").lower()
+
+    if cat in ("movie", "series"):
+        tmdb_client = tmdb or TMDBClient()
+        has_ids = bool(item.get("imdb_id") or item.get("kp_id") or meta_before.get("tmdb_id"))
+        if has_ids:
+            candidate: dict[str, Any] = {
+                "category": cat,
+                "media_type": "tv" if cat == "series" else "movie",
+                "tmdb_id": meta_before.get("tmdb_id"),
+                "wikidata_id": meta_before.get("wikidata_id"),
+                "imdb_id": item.get("imdb_id"),
+                "kp_id": item.get("kp_id"),
+                "title_ru": item.get("title_ru"),
+                "title_orig": item.get("title_orig"),
+                "release_year": item.get("release_year"),
+                "creator": item.get("creator"),
+                "summary": item.get("summary"),
+                "poster_url": item.get("poster_url"),
+                "rating_rt": item.get("rating_rt"),
+                "url_rt": item.get("url_rt"),
+                "genres": list(item.get("genres") or []),
+            }
+        else:
+            raw_input = (item.get("raw_input") or "").strip()
+            direct = movies_pipeline.parse_direct_media_ids(raw_input) if raw_input else {}
+            seed = raw_input if direct else f"{item.get('title_ru') or ''} {item.get('release_year') or ''}".strip()
+            query, year = movies_pipeline.parse_title_and_year(seed)
+            candidates = movies_pipeline.search_movie_candidates(
+                query,
+                year=year or item.get("release_year"),
+                tmdb=tmdb_client,
+                limit=3,
+                title_orig=item.get("title_orig"),
+                raw_text=raw_input or item.get("canonical_url"),
+            )
+            if not candidates:
+                return {"status": "no_match", "item": item, "updated_fields": []}
+            candidate = candidates[0]
+
+        enriched = movies_pipeline.enrich_candidate(candidate, tmdb=tmdb_client)
+        merged_meta = dict(meta_before)
+        for k, v in (enriched.get("meta") or {}).items():
+            if v is not None:
+                merged_meta[k] = v
+
+        next_title = enriched.get("title_ru")
+        if not next_title or next_title == "Без названия":
+            next_title = item.get("title_ru") or "Без названия"
+        next_genres = enriched.get("genres") or item.get("genres") or []
+
+        repo.update_item_enriched(
+            conn,
+            item_id,
+            category=enriched.get("category") or cat,
+            title_ru=next_title,
+            title_orig=enriched.get("title_orig") or item.get("title_orig"),
+            release_year=enriched.get("release_year") or item.get("release_year"),
+            creator=enriched.get("creator") or item.get("creator"),
+            summary=enriched.get("summary") or item.get("summary"),
+            poster_url=enriched.get("poster_url") or item.get("poster_url"),
+            imdb_id=enriched.get("imdb_id") or item.get("imdb_id"),
+            kp_id=enriched.get("kp_id") or item.get("kp_id"),
+            rating_imdb=enriched.get("rating_imdb") if enriched.get("rating_imdb") is not None else item.get("rating_imdb"),
+            rating_kp=enriched.get("rating_kp") if enriched.get("rating_kp") is not None else item.get("rating_kp"),
+            rating_rt=enriched.get("rating_rt") if enriched.get("rating_rt") is not None else item.get("rating_rt"),
+            url_rt=enriched.get("url_rt") or item.get("url_rt"),
+            genres=next_genres,
+            meta=merged_meta,
+            processing_status="ok",
+            preserve_user_meta=True,
+        )
+    elif cat == "book":
+        b_client = books_client or BooksClient()
+        query = f"{item.get('title_ru') or ''} {item.get('creator') or ''}".strip() or (item.get("raw_input") or "").strip()
+        candidates = books_pipeline.search_book_candidates(query, books_client=b_client, limit=3)
+        chosen: dict[str, Any] | None = None
+        if candidates:
+            target_gb = item.get("google_books_id")
+            if target_gb:
+                chosen = next((c for c in candidates if c.get("google_books_id") == target_gb), candidates[0])
+            else:
+                chosen = candidates[0]
+        else:
+            chosen = {
+                "title_ru": item.get("title_ru"),
+                "title_orig": item.get("title_orig"),
+                "creator": item.get("creator"),
+                "release_year": item.get("release_year"),
+                "summary": item.get("summary"),
+                "poster_url": item.get("poster_url"),
+                "google_books_id": item.get("google_books_id"),
+                "isbn13": item.get("isbn13"),
+                "genres": list(item.get("genres") or []),
+                "page_count": meta_before.get("page_count"),
+            }
+
+        enriched = books_pipeline.enrich_book_candidate(chosen)
+        merged_meta = dict(meta_before)
+        for k, v in (enriched.get("meta") or {}).items():
+            if v is not None:
+                merged_meta[k] = v
+
+        next_title = enriched.get("title_ru")
+        if not next_title or next_title == "Без названия":
+            next_title = item.get("title_ru") or "Без названия"
+        next_genres = enriched.get("genres") or item.get("genres") or []
+
+        repo.update_item_enriched(
+            conn,
+            item_id,
+            category="book",
+            title_ru=next_title,
+            title_orig=enriched.get("title_orig") or item.get("title_orig"),
+            release_year=enriched.get("release_year") or item.get("release_year"),
+            creator=enriched.get("creator") or item.get("creator"),
+            summary=enriched.get("summary") or item.get("summary"),
+            poster_url=enriched.get("poster_url") or item.get("poster_url"),
+            google_books_id=enriched.get("google_books_id") or item.get("google_books_id"),
+            isbn13=enriched.get("isbn13") or item.get("isbn13"),
+            rating_kp=enriched.get("rating_kp") if enriched.get("rating_kp") is not None else item.get("rating_kp"),
+            rating_imdb=enriched.get("rating_imdb") if enriched.get("rating_imdb") is not None else item.get("rating_imdb"),
+            genres=next_genres,
+            meta=merged_meta,
+            processing_status="ok",
+            preserve_user_meta=True,
+        )
+    else:
+        url = (item.get("canonical_url") or "").strip()
+        if not url:
+            for src in item.get("sources") or []:
+                if src.get("source_url"):
+                    url = str(src["source_url"]).strip()
+                    break
+        if not url:
+            m_url = _URL_RE.search(item.get("raw_input") or "")
+            if m_url:
+                url = m_url.group(0)
+
+        llm = llm_client or GroqLLMClient()
+        if url:
+            url = normalize_url(url) or url
+            low_url = url.lower()
+            if cat == "video" or "youtu.be" in low_url or "youtube.com" in low_url:
+                yt_cli = youtube_client or YouTubeClient()
+                yt_info = yt_cli.fetch_video_info(url)
+                raw_title = yt_info.get("title")
+                raw_desc = yt_info.get("description")
+                new_creator = yt_info.get("creator") or item.get("creator")
+                new_year = yt_info.get("release_year") or item.get("release_year")
+                new_poster = yt_info.get("poster_url") or item.get("poster_url")
+                new_tags: list[str] = list(yt_info.get("tags") or [])
+                llm_summary: str | None = None
+                if llm.is_configured and (raw_title or raw_desc):
+                    llm_res = llm.summarize_and_tag(
+                        title=raw_title or item.get("title_ru"),
+                        text=raw_desc or raw_title or "",
+                        existing_tags=repo.list_existing_tags(conn),
+                    )
+                    raw_title = llm_res.get("title_ru") or raw_title
+                    llm_summary = llm_res.get("summary")
+                    new_tags = [*(llm_res.get("tags") or []), *new_tags]
+
+                merged_tags = list(existing_tags)
+                for candidate_tag in new_tags:
+                    clean_t = str(candidate_tag).lstrip("#").strip().lower()
+                    if clean_t and clean_t not in merged_tags:
+                        merged_tags.append(clean_t)
+                merged_tags = merged_tags[:8]
+
+                repo.update_item_enriched(
+                    conn,
+                    item_id,
+                    category=cat,
+                    title_ru=raw_title or item.get("title_ru") or "Без названия",
+                    title_orig=item.get("title_orig"),
+                    release_year=new_year,
+                    creator=new_creator,
+                    summary=llm_summary or raw_desc or item.get("summary"),
+                    poster_url=new_poster,
+                    canonical_url=url,
+                    tags=merged_tags,
+                    meta=meta_before,
+                    processing_status="ok",
+                    preserve_user_meta=True,
+                )
+            else:
+                scraper = scrape_fn or scrape_url
+                scraped = scraper(url)
+                new_url = scraped.get("canonical_url") or url
+                raw_title = scraped.get("title")
+                raw_desc = scraped.get("text") or scraped.get("description")
+                new_poster = scraped.get("poster_url") or item.get("poster_url")
+                new_creator = scraped.get("author") or item.get("creator")
+                if not scraped.get("ok") and not raw_title and not raw_desc and not scraped.get("poster_url"):
+                    return {"status": "no_match", "item": item, "updated_fields": []}
+
+                if raw_desc:
+                    repo.upsert_extracted_text_for_item(
+                        conn,
+                        item,
+                        extracted_text=raw_desc,
+                        source_url=new_url,
+                        author=scraped.get("author"),
+                    )
+
+                new_tags = []
+                llm_title = None
+                llm_summary = None
+                llm_ctx = "\n\n".join(p for p in (raw_title, raw_desc) if p)
+                if llm.is_configured and llm_ctx:
+                    llm_res = llm.summarize_and_tag(
+                        title=raw_title or item.get("title_ru"),
+                        text=llm_ctx,
+                        existing_tags=repo.list_existing_tags(conn),
+                    )
+                    llm_title = llm_res.get("title_ru")
+                    llm_summary = llm_res.get("summary")
+                    new_tags = list(llm_res.get("tags") or [])
+
+                merged_tags = list(existing_tags)
+                for candidate_tag in new_tags:
+                    clean_t = str(candidate_tag).lstrip("#").strip().lower()
+                    if clean_t and clean_t not in merged_tags:
+                        merged_tags.append(clean_t)
+                merged_tags = merged_tags[:8]
+
+                next_title = llm_title or raw_title or item.get("title_ru") or "Без названия"
+                next_summary = llm_summary or item.get("summary") or raw_desc
+
+                repo.update_item_enriched(
+                    conn,
+                    item_id,
+                    category=cat,
+                    title_ru=next_title,
+                    title_orig=item.get("title_orig"),
+                    release_year=item.get("release_year"),
+                    creator=new_creator,
+                    summary=next_summary,
+                    poster_url=new_poster,
+                    canonical_url=new_url,
+                    tags=merged_tags,
+                    meta=meta_before,
+                    processing_status="ok",
+                    preserve_user_meta=True,
+                )
+        else:
+            if not llm.is_configured:
+                return {"status": "no_match", "item": item, "updated_fields": []}
+            src_text = (
+                item.get("extracted_text")
+                or item.get("summary")
+                or item.get("raw_input")
+                or item.get("title_ru")
+                or ""
+            )
+            llm_res = llm.summarize_and_tag(
+                title=item.get("title_ru"),
+                text=src_text,
+                existing_tags=repo.list_existing_tags(conn),
+            )
+            merged_tags = list(existing_tags)
+            for candidate_tag in llm_res.get("tags") or []:
+                clean_t = str(candidate_tag).lstrip("#").strip().lower()
+                if clean_t and clean_t not in merged_tags:
+                    merged_tags.append(clean_t)
+            merged_tags = merged_tags[:8]
+
+            repo.update_item_enriched(
+                conn,
+                item_id,
+                category=cat,
+                title_ru=llm_res.get("title_ru") or item.get("title_ru") or "Без названия",
+                title_orig=item.get("title_orig"),
+                release_year=item.get("release_year"),
+                creator=item.get("creator"),
+                summary=item.get("summary") or llm_res.get("summary"),
+                poster_url=item.get("poster_url"),
+                tags=merged_tags,
+                meta=meta_before,
+                processing_status="ok",
+                preserve_user_meta=True,
+            )
+
+    updated = repo.get_item(conn, item_id)
+    assert updated is not None
+    after = _snapshot(updated)
+    updated_fields = [k for k in before if before[k] != after[k]]
+    return {
+        "status": "updated" if updated_fields else "unchanged",
+        "item": updated,
+        "updated_fields": updated_fields,
+    }
