@@ -384,6 +384,66 @@ class TestStage6TMA(unittest.TestCase):
         finally:
             settings.llm_for_ideas = old_llm_ideas
 
+    def test_tma_v26_static_ui_contract(self) -> None:
+        import re
+        import app.main as main_mod
+
+        tma_dir = Path(__file__).resolve().parent.parent / "app" / "tma"
+        self.assertEqual(main_mod.TMA_DIR.resolve(), tma_dir.resolve())
+        html = (tma_dir / "index.html").read_text(encoding="utf-8")
+        css = (tma_dir / "styles.css").read_text(encoding="utf-8")
+        js = (tma_dir / "app.js").read_text(encoding="utf-8")
+
+        # 1. Версия ассетов v26 и удаление дубля фильтра статусов
+        self.assertIn("./styles.css?v=26", html)
+        self.assertIn("./app.js?v=26", html)
+        self.assertNotIn("statusFilterSelect", html)
+        self.assertNotIn("statusFilterSelect", js)
+
+        # 2. Ключевые элементы и функции Этапа 1 (v26)
+        for token in (
+            'id="ratingPopover"',
+            'id="emptyStateActions"',
+            'id="emptyStateTitle"',
+            'id="emptyStateDesc"',
+        ):
+            self.assertIn(token, html)
+
+        for token in (
+            "drawer-status-pill",
+            "drawer-rate-btn",
+            "swipe-row-wrap",
+            "topbar-hidden",
+            "rating-popover",
+            "list-mobile-actions",
+            "--cat-accent-color",
+        ):
+            self.assertIn(token, css)
+
+        for token in (
+            "flushPendingNoteSave",
+            "syncDetailDrawerInPlace",
+            "openRatingPopover",
+            "closeRatingPopover",
+            "renderEmptyState",
+            "initMobileAutoHideTopbar",
+            "swipe-row-wrap",
+            "drawer-status-pill",
+            "drawer-rate-btn",
+            "topbar-hidden",
+        ):
+            self.assertIn(token, js)
+
+        # 3. Все ID, запрашиваемые через getElementById(...) в app.js, объявлены в index.html или динамическом HTML
+        declared_ids = set(re.findall(r'id="([^"]+)"', html)) | set(re.findall(r'id="([^"$]+)"', js))
+        referenced_ids = set(re.findall(r'document\.getElementById\("([^"]+)"\)', js))
+        missing_ids = referenced_ids - declared_ids
+        self.assertEqual(missing_ids, set(), f"Missing HTML/JS IDs: {missing_ids}")
+
+        # 4. Проверка монтирования /tma в FastAPI-приложении и корневого редиректа
+        self.assertTrue(any(getattr(r, "path", "") == "/tma" for r in main_mod.app.routes))
+        self.assertEqual(main_mod.root_redirect().headers.get("location"), "/tma/")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

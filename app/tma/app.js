@@ -23,6 +23,9 @@
   }
 
   const isTgWebApp = Boolean(tg && tg.initData);
+  if (isTgWebApp) {
+    document.documentElement.classList.add("is-tma");
+  }
 
   const UI_ICONS = {
     library: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>`,
@@ -106,6 +109,7 @@
     drawerEditMode: false,
     drawerAddTagMode: false,
     statusPopoverItemId: null,
+    ratingPopoverItemId: null,
     filtersSheetOpen: false,
     quickAddOpen: false,
     cmdPaletteOpen: false,
@@ -586,6 +590,7 @@
   // ==================== APPLE LIQUID GLASS КНОПКИ (СТАТУС / ОЦЕНКА / В ЧАТЕ / УДАЛИТЬ) ====================
 
   const statusPopoverEl = document.getElementById("statusPopover");
+  const ratingPopoverEl = document.getElementById("ratingPopover");
 
   function closeStatusPopover() {
     if (state.statusPopoverItemId === null) return;
@@ -595,6 +600,19 @@
       statusPopoverEl.innerHTML = "";
     }
     document.querySelectorAll(".liquid-status-btn.open").forEach((btn) => {
+      btn.classList.remove("open");
+      btn.setAttribute("aria-expanded", "false");
+    });
+  }
+
+  function closeRatingPopover() {
+    if (state.ratingPopoverItemId === null) return;
+    state.ratingPopoverItemId = null;
+    if (ratingPopoverEl) {
+      ratingPopoverEl.classList.add("hidden");
+      ratingPopoverEl.innerHTML = "";
+    }
+    document.querySelectorAll(".liquid-rating-btn.open").forEach((btn) => {
       btn.classList.remove("open");
       btn.setAttribute("aria-expanded", "false");
     });
@@ -611,6 +629,7 @@
     const item = state.items.find((i) => Number(i.id) === numId);
     if (!item) return;
 
+    closeRatingPopover();
     closeStatusPopover();
     state.statusPopoverItemId = numId;
     anchorBtn.classList.add("open");
@@ -651,6 +670,63 @@
     haptic("selection");
   }
 
+  function openRatingPopover(itemId, anchorBtn) {
+    if (!ratingPopoverEl) return;
+    const numId = Number(itemId);
+    if (state.ratingPopoverItemId === numId) {
+      closeRatingPopover();
+      return;
+    }
+
+    const item = state.items.find((i) => Number(i.id) === numId);
+    if (!item) return;
+
+    closeStatusPopover();
+    closeRatingPopover();
+    state.ratingPopoverItemId = numId;
+    anchorBtn.classList.add("open");
+    anchorBtn.setAttribute("aria-expanded", "true");
+
+    const currentRating = Number(item.user_rating || 0);
+    const resetBtnHtml = currentRating
+      ? `<button type="button" class="rating-pop-reset" data-rating-opt="0" data-id="${item.id}">Сбросить</button>`
+      : "";
+    const numsHtml = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      .map((r) => {
+        const active = currentRating === r;
+        return `<button type="button" class="rp-num-btn ${active ? "active" : ""}" data-rating-opt="${r}" data-id="${item.id}" role="option" aria-selected="${active ? "true" : "false"}">${r}</button>`;
+      })
+      .join("");
+
+    ratingPopoverEl.innerHTML = `
+      <div class="rating-pop-header">
+        <span class="rating-pop-title">Моя оценка</span>
+        ${resetBtnHtml}
+      </div>
+      <div class="rating-pop-grid">${numsHtml}</div>
+    `;
+
+    ratingPopoverEl.classList.remove("hidden");
+
+    const rect = anchorBtn.getBoundingClientRect();
+    const popW = Math.max(ratingPopoverEl.offsetWidth || 220, 220);
+    const popH = ratingPopoverEl.offsetHeight || 125;
+
+    let left = rect.left;
+    if (left + popW > window.innerWidth - 8) {
+      left = Math.max(8, window.innerWidth - popW - 8);
+    }
+
+    let top = rect.bottom + 5;
+    if (top + popH > window.innerHeight - 10) {
+      top = Math.max(8, rect.top - popH - 5);
+    }
+
+    ratingPopoverEl.style.left = `${Math.round(left)}px`;
+    ratingPopoverEl.style.top = `${Math.round(top)}px`;
+    haptic("selection");
+  }
+
   if (statusPopoverEl) {
     statusPopoverEl.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -663,23 +739,35 @@
     });
   }
 
+  if (ratingPopoverEl) {
+    ratingPopoverEl.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const optBtn = e.target.closest("[data-rating-opt]");
+      if (!optBtn || !optBtn.dataset.id) return;
+      const id = Number(optBtn.dataset.id);
+      const rawVal = Number(optBtn.dataset.ratingOpt);
+      const item = state.items.find((i) => Number(i.id) === id);
+      const nextVal = item && Number(item.user_rating || 0) === rawVal && rawVal !== 0 ? 0 : rawVal;
+      closeRatingPopover();
+      await patchItem(id, { user_rating: nextVal });
+      haptic("selection");
+    });
+  }
+
   function buildCardActionsHtml(item, variant = "") {
     const stMeta = STATUS_META[item.status] || STATUS_META.inbox;
     const isStatusOpen = state.statusPopoverItemId === Number(item.id);
+    const isRatingOpen = state.ratingPopoverItemId === Number(item.id);
 
-    const currentRating = item.user_rating || 0;
-    const ratingOptions = [
-      `<option value="0" ${currentRating === 0 ? "selected" : ""}>Оценка</option>`,
-    ];
-    for (let r = 10; r >= 1; r -= 1) {
-      ratingOptions.push(
-        `<option value="${r}" ${currentRating === r ? "selected" : ""}>${r}</option>`
-      );
-    }
+    const currentRating = Number(item.user_rating || 0);
+    const ratingLabel = currentRating ? String(currentRating) : "Оценка";
+    const includeDelete = variant !== "mobile-inline";
 
-    const delBtnHtml = `<button type="button" class="liquid-pill liquid-delete-btn delete-btn" data-action="delete" data-id="${item.id}" title="Удалить запись" aria-label="Удалить запись">${UI_ICONS.trash}</button>`;
+    const delBtnHtml = includeDelete
+      ? `<span class="card-actions-right"><button type="button" class="liquid-pill liquid-delete-btn delete-btn" data-action="delete" data-id="${item.id}" title="Удалить запись" aria-label="Удалить запись">${UI_ICONS.trash}</button></span>`
+      : "";
     const starIcon = currentRating ? UI_ICONS.starFilled : UI_ICONS.star;
-    const cls = variant ? `card-actions ${variant}` : "card-actions";
+    const cls = variant && variant !== "mobile-inline" ? `card-actions ${variant}` : "card-actions";
 
     return `
       <div class="${cls}">
@@ -688,16 +776,12 @@
           <span>${escapeHtml(stMeta.label)}</span>
           <span class="pill-st-chev">${UI_ICONS.chevronDown}</span>
         </button>
-        <div class="liquid-pill liquid-select-wrap ${currentRating ? "has-rating" : ""}">
-          <span class="pill-ico star-ico">${starIcon}</span>
-          <select class="user-rating-select" data-action="rating" data-id="${item.id}" aria-label="Моя оценка">
-            ${ratingOptions.join("")}
-          </select>
-          <span class="pill-chevron">${UI_ICONS.chevronDown}</span>
-        </div>
-        <span class="card-actions-right">
-          ${delBtnHtml}
-        </span>
+        <button type="button" class="liquid-pill liquid-rating-btn ${currentRating ? "has-rating" : ""} ${isRatingOpen ? "open" : ""}" data-action="rating-menu" data-id="${item.id}" aria-haspopup="listbox" aria-expanded="${isRatingOpen ? "true" : "false"}" aria-label="Моя оценка">
+          <span class="pill-st-ico">${starIcon}</span>
+          <span>${ratingLabel}</span>
+          <span class="pill-st-chev">${UI_ICONS.chevronDown}</span>
+        </button>
+        ${delBtnHtml}
       </div>
     `;
   }
@@ -781,8 +865,143 @@
     return m ? m[1] : "";
   }
 
+  let noteSaveTimer = null;
+  let pendingNoteDraft = null;
+
+  function formatAddedDate(isoStr) {
+    if (!isoStr) return "";
+    const raw = String(isoStr).trim();
+    const normalized = raw.includes("T") ? raw : raw.replace(" ", "T") + "Z";
+    const dt = new Date(normalized);
+    if (Number.isNaN(dt.getTime())) return raw.slice(0, 10);
+    try {
+      return dt.toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" });
+    } catch {
+      return raw.slice(0, 10);
+    }
+  }
+
+  function setNoteSaveIndicator(text, tone = "") {
+    const el = document.getElementById("drawerNoteStatus");
+    if (!el) return;
+    el.textContent = text;
+    el.className = `note-save-state${tone ? ` ${tone}` : ""}`;
+  }
+
+  async function flushPendingNoteSave(opts = {}) {
+    clearTimeout(noteSaveTimer);
+    noteSaveTimer = null;
+    if (!pendingNoteDraft) return;
+    const draft = pendingNoteDraft;
+    pendingNoteDraft = null;
+    setNoteSaveIndicator("Сохранение...");
+    const ok = await patchItem(
+      draft.itemId,
+      { user_note: draft.value },
+      { fromNoteAutosave: true, keepalive: Boolean(opts.keepalive) }
+    );
+    if (Number(state.drawerItemId) === Number(draft.itemId)) {
+      setNoteSaveIndicator(ok ? "Сохранено ✓" : "Ошибка сохранения", ok ? "saved" : "error");
+    }
+  }
+
+  function buildDrawerTagsInnerHtml(item) {
+    const genresList = item.genres || [];
+    const userTagsList = item.tags || [];
+    const genrePills = genresList
+      .map((g) => `<span class="genre-pill" data-drawer-tag="${escapeHtml(g)}">#${escapeHtml(g)}</span>`)
+      .join("");
+    const userTagPills = userTagsList
+      .map(
+        (t) =>
+          `<span class="genre-pill" data-drawer-tag="${escapeHtml(t)}">#${escapeHtml(t)}<span class="tag-remove-x" data-remove-tag="${escapeHtml(t)}" title="Удалить тег">×</span></span>`
+      )
+      .join("");
+
+    const datalistOpts = (state.allTags || [])
+      .map((t) => `<option value="${escapeHtml(t.tag)}"></option>`)
+      .join("");
+
+    const tagAddFormHtml = state.drawerAddTagMode
+      ? `
+        <div class="drawer-tag-add-row">
+          <input type="text" id="drawerNewTagInput" class="drawer-edit-input drawer-tag-input" list="drawerTagsDatalist" placeholder="Новый тег..." autocomplete="off" />
+          <datalist id="drawerTagsDatalist">${datalistOpts}</datalist>
+          <button type="button" class="liquid-pill drawer-save-note-btn" data-drawer-add-tag-submit="${item.id}">OK</button>
+        </div>
+      `
+      : "";
+
+    return `
+      <div class="drawer-section-title">Жанры и теги</div>
+      <div class="genres-line">
+        ${genrePills}
+        ${userTagPills}
+        <button type="button" class="genre-pill drawer-add-tag-pill" data-drawer-add-tag-toggle>+ Тег</button>
+      </div>
+      ${tagAddFormHtml}
+    `;
+  }
+
+  function buildDrawerSummaryInnerHtml(item) {
+    if (state.drawerEditMode) {
+      return `
+        <div class="drawer-section">
+          <div class="drawer-section-title">Редактирование карточки</div>
+          <input type="text" id="drawerEditTitleInput" class="drawer-edit-input" value="${escapeHtml(item.title_ru || "")}" placeholder="Название" />
+          <textarea id="drawerEditSummaryInput" class="drawer-note-textarea" rows="4" placeholder="Описание...">${escapeHtml(item.summary || "")}</textarea>
+          <div class="drawer-note-footer">
+            <button type="button" class="confirm-cancel-btn" data-drawer-edit-cancel>Отмена</button>
+            <button type="button" class="liquid-pill drawer-save-note-btn" data-drawer-edit-save="${item.id}">Сохранить</button>
+          </div>
+        </div>
+      `;
+    }
+    if (item.summary) {
+      return `
+        <div class="drawer-section">
+          <div class="drawer-section-title">Описание</div>
+          <div class="drawer-summary">${linkifyText(item.summary)}</div>
+        </div>
+      `;
+    }
+    return "";
+  }
+
+  function buildDrawerReaderHtml(item) {
+    const sourceLongText = (item.sources || [])
+      .map((s) => (s.raw_text || "").trim())
+      .find((t) => t && !/^https?:\/\/\S+$/i.test(t) && t.length > (item.summary || "").trim().length + 40);
+    const fullReaderText = (item.extracted_text || "").trim() || sourceLongText || "";
+    if (!fullReaderText) return "";
+    return `
+      <details class="drawer-section drawer-reader-box">
+        <summary class="drawer-reader-summary">
+          <span>📖 Полный текст из источника</span>
+          <span>▾</span>
+        </summary>
+        <div class="drawer-reader-content">${linkifyText(fullReaderText)}</div>
+      </details>
+    `;
+  }
+
+  function buildDrawerActionsFooterHtml(item) {
+    const chatHtml = `<span></span>`;
+    const deleteFooterHtml = state.drawerConfirmDelete
+      ? `
+        <div class="drawer-confirm-box">
+          <span style="font-size:12.5px;color:var(--muted);">Удалить запись?</span>
+          <button type="button" class="confirm-yes-btn" data-drawer-delete-confirm="${item.id}">Удалить</button>
+          <button type="button" class="confirm-cancel-btn" data-drawer-delete-cancel>Отмена</button>
+        </div>
+      `
+      : `<button type="button" class="drawer-delete-btn" data-drawer-delete-ask>${UI_ICONS.trash}<span>Удалить</span></button>`;
+    return `${chatHtml}${deleteFooterHtml}`;
+  }
+
   function navigateDrawer(delta) {
     if (state.drawerItemId === null || !state.items.length) return;
+    flushPendingNoteSave();
     const idx = state.items.findIndex((i) => Number(i.id) === Number(state.drawerItemId));
     if (idx === -1) return;
     const target = state.items[idx + delta];
@@ -791,11 +1010,66 @@
     }
   }
 
+  function syncDetailDrawerInPlace(item, opts = {}) {
+    if (!item || state.drawerItemId === null) return;
+    if (Number(drawerBody.dataset.renderedItemId) !== Number(item.id)) {
+      renderDetailDrawer();
+      return;
+    }
+
+    const titleEl = document.getElementById("drawerTitle");
+    if (titleEl) {
+      const yearStr = item.release_year ? ` (${item.release_year})` : "";
+      titleEl.textContent = `${item.title_ru || ""}${yearStr}`;
+    }
+
+    const activeStatus = item.status || "inbox";
+    drawerBody.querySelectorAll(".drawer-status-pill[data-drawer-status-btn]").forEach((btn) => {
+      const isAct = btn.dataset.drawerStatusBtn === activeStatus;
+      btn.classList.toggle("active", isAct);
+      btn.setAttribute("aria-pressed", isAct ? "true" : "false");
+    });
+
+    const curRating = Number(item.user_rating || 0);
+    drawerBody.querySelectorAll(".drawer-rate-btn[data-drawer-rate-btn]").forEach((btn) => {
+      const n = Number(btn.dataset.drawerRateBtn);
+      const isExact = curRating === n;
+      const isFilled = curRating > 0 && n < curRating;
+      btn.classList.toggle("active", isExact);
+      btn.classList.toggle("filled", isFilled);
+      btn.setAttribute("aria-pressed", isExact ? "true" : "false");
+    });
+
+    const ratingValEl = document.getElementById("drawerRatingValue");
+    if (ratingValEl) {
+      ratingValEl.textContent = curRating ? `★ ${curRating} / 10` : "Без оценки";
+      ratingValEl.classList.toggle("has-rating", Boolean(curRating));
+    }
+
+    if (opts.syncSummary) {
+      const summarySlot = document.getElementById("drawerSummarySlot");
+      if (summarySlot) summarySlot.innerHTML = buildDrawerSummaryInnerHtml(item);
+    }
+
+    if (opts.syncTags) {
+      const tagsSection = document.getElementById("drawerTagsSection");
+      if (tagsSection) tagsSection.innerHTML = buildDrawerTagsInnerHtml(item);
+    }
+
+    if (!opts.skipNoteInput) {
+      const noteInp = document.getElementById("drawerNoteInput");
+      if (noteInp && document.activeElement !== noteInp) {
+        noteInp.value = parseMeta(item.meta).user_note || "";
+      }
+    }
+  }
+
   function renderDetailDrawer() {
     if (state.drawerItemId === null) {
       drawerOverlay.classList.add("hidden");
       drawerOverlay.setAttribute("aria-hidden", "true");
       drawerBody.innerHTML = "";
+      delete drawerBody.dataset.renderedItemId;
       syncTelegramBackButton();
       return;
     }
@@ -830,76 +1104,22 @@
       subParts.push(`📺 Сезонов: ${Number(meta.seasons_count)}`);
     }
     const creatorHtml = subParts.length ? `<div class="drawer-creator">${subParts.join(" · ")}</div>` : "";
+    const addedLabel = formatAddedDate(item.created_at);
+    const addedDateHtml = addedLabel ? `<div class="drawer-date-meta">Добавлено ${escapeHtml(addedLabel)}</div>` : "";
 
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: true });
 
-    const genresList = item.genres || [];
-    const userTagsList = item.tags || [];
-    const genrePills = genresList
-      .map((g) => `<span class="genre-pill" data-drawer-tag="${escapeHtml(g)}">#${escapeHtml(g)}</span>`)
-      .join("");
-    const userTagPills = userTagsList
-      .map(
-        (t) =>
-          `<span class="genre-pill" data-drawer-tag="${escapeHtml(t)}">#${escapeHtml(t)}<span class="tag-remove-x" data-remove-tag="${escapeHtml(t)}" title="Удалить тег">×</span></span>`
-      )
-      .join("");
-
-    const datalistOpts = (state.allTags || [])
-      .map((t) => `<option value="${escapeHtml(t.tag)}"></option>`)
-      .join("");
-
-    const tagAddFormHtml = state.drawerAddTagMode
-      ? `
-        <div class="drawer-tag-add-row">
-          <input type="text" id="drawerNewTagInput" class="drawer-edit-input drawer-tag-input" list="drawerTagsDatalist" placeholder="Новый тег..." autocomplete="off" />
-          <datalist id="drawerTagsDatalist">${datalistOpts}</datalist>
-          <button type="button" class="liquid-pill drawer-save-note-btn" data-drawer-add-tag-submit="${item.id}">OK</button>
-        </div>
-      `
-      : "";
-
-    const tagsHtml = `
-      <div class="drawer-section">
-        <div class="drawer-section-title">Жанры и теги</div>
-        <div class="genres-line">
-          ${genrePills}
-          ${userTagPills}
-          <button type="button" class="genre-pill drawer-add-tag-pill" data-drawer-add-tag-toggle>+ Тег</button>
-        </div>
-        ${tagAddFormHtml}
-      </div>
-    `;
-
-    const summaryEditHtml = state.drawerEditMode
-      ? `
-        <div class="drawer-section">
-          <div class="drawer-section-title">Редактирование карточки</div>
-          <input type="text" id="drawerEditTitleInput" class="drawer-edit-input" value="${escapeHtml(item.title_ru || "")}" placeholder="Название" />
-          <textarea id="drawerEditSummaryInput" class="drawer-note-textarea" rows="4" placeholder="Описание...">${escapeHtml(item.summary || "")}</textarea>
-          <div class="drawer-note-footer">
-            <button type="button" class="confirm-cancel-btn" data-drawer-edit-cancel>Отмена</button>
-            <button type="button" class="liquid-pill drawer-save-note-btn" data-drawer-edit-save="${item.id}">Сохранить</button>
-          </div>
-        </div>
-      `
-      : item.summary
-      ? `
-        <div class="drawer-section">
-          <div class="drawer-section-title">Описание</div>
-          <div class="drawer-summary">${linkifyText(item.summary)}</div>
-        </div>
-      `
-      : "";
+    const tagsHtml = `<div class="drawer-section" id="drawerTagsSection">${buildDrawerTagsInnerHtml(item)}</div>`;
+    const summaryEditHtml = `<div id="drawerSummarySlot">${buildDrawerSummaryInnerHtml(item)}</div>`;
 
     const userNote = meta.user_note || "";
     const noteSectionHtml = `
       <div class="drawer-section">
-        <div class="drawer-section-title">✍️ Моя заметка</div>
-        <textarea id="drawerNoteInput" class="drawer-note-textarea" rows="2" placeholder="Добавить личную заметку, кто посоветовал, мысли...">${escapeHtml(userNote)}</textarea>
-        <div class="drawer-note-footer">
-          <button type="button" class="liquid-pill drawer-save-note-btn" data-drawer-save-note="${item.id}">Сохранить заметку</button>
+        <div class="drawer-note-head">
+          <div class="drawer-section-title">✍️ Моя заметка</div>
+          <span class="note-save-state" id="drawerNoteStatus"></span>
         </div>
+        <textarea id="drawerNoteInput" class="drawer-note-textarea" rows="2" data-note-item-id="${item.id}" placeholder="Добавить личную заметку, кто посоветовал, мысли...">${escapeHtml(userNote)}</textarea>
       </div>
     `;
 
@@ -913,46 +1133,26 @@
       `
       : "";
 
-    const sourceLongText = (item.sources || [])
-      .map((s) => (s.raw_text || "").trim())
-      .find((t) => t && !/^https?:\/\/\S+$/i.test(t) && t.length > (item.summary || "").trim().length + 40);
-    const fullReaderText = (item.extracted_text || "").trim() || sourceLongText || "";
-    const readerHtml = fullReaderText
-      ? `
-        <details class="drawer-section drawer-reader-box">
-          <summary class="drawer-reader-summary">
-            <span>📖 Полный текст из источника</span>
-            <span>▾</span>
-          </summary>
-          <div class="drawer-reader-content">${linkifyText(fullReaderText)}</div>
-        </details>
-      `
-      : "";
+    const readerHtml = `<div id="drawerReaderSlot">${buildDrawerReaderHtml(item)}</div>`;
 
-    const statusOptions = Object.entries(STATUS_META)
-      .map(([k, v]) => `<option value="${k}" ${item.status === k ? "selected" : ""}>${escapeHtml(v.label)}</option>`)
-      .join("");
-
-    const ratingOptions = [0, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
-      .map((val) => {
-        const selected = (item.user_rating || 0) === val ? "selected" : "";
-        const label = val === 0 ? "Без оценки" : `★ ${val}`;
-        return `<option value="${val}" ${selected}>${label}</option>`;
+    const activeStatus = item.status || "inbox";
+    const statusPillsHtml = Object.entries(STATUS_META)
+      .map(([k, v]) => {
+        const active = activeStatus === k;
+        return `<button type="button" class="drawer-status-pill ${active ? "active" : ""}" data-drawer-status-btn="${k}" data-id="${item.id}" aria-pressed="${active ? "true" : "false"}"><span style="display:inline-flex;color:${v.dot};">${v.svg}</span><span>${escapeHtml(v.label)}</span></button>`;
       })
       .join("");
 
-    const chatHtml = `<span></span>`;
+    const curRating = Number(item.user_rating || 0);
+    const ratingScaleHtml = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      .map((n) => {
+        const isExact = curRating === n;
+        const isFilled = curRating > 0 && n < curRating;
+        return `<button type="button" class="drawer-rate-btn ${isExact ? "active" : isFilled ? "filled" : ""}" data-drawer-rate-btn="${n}" data-id="${item.id}" aria-pressed="${isExact ? "true" : "false"}">${n}</button>`;
+      })
+      .join("");
 
-    const deleteFooterHtml = state.drawerConfirmDelete
-      ? `
-        <div class="drawer-confirm-box">
-          <span style="font-size:12.5px;color:var(--muted);">Удалить запись?</span>
-          <button type="button" class="confirm-yes-btn" data-drawer-delete-confirm="${item.id}">Удалить</button>
-          <button type="button" class="confirm-cancel-btn" data-drawer-delete-cancel>Отмена</button>
-        </div>
-      `
-      : `<button type="button" class="drawer-delete-btn" data-drawer-delete-ask>${UI_ICONS.trash}<span>Удалить</span></button>`;
-
+    drawerBody.dataset.renderedItemId = String(item.id);
     drawerBody.innerHTML = `
       <div class="drawer-hero">
         <div class="drawer-poster">${posterHtml}</div>
@@ -963,6 +1163,7 @@
           </div>
           ${origLine}
           ${creatorHtml}
+          ${addedDateHtml}
         </div>
       </div>
 
@@ -970,20 +1171,16 @@
       ${ytSectionHtml}
 
       <div class="drawer-section">
-        <div class="drawer-controls-grid">
-          <div class="drawer-field">
-            <label for="drawerStatusSelect">Статус</label>
-            <select id="drawerStatusSelect" class="drawer-select" data-drawer-status="${item.id}">
-              ${statusOptions}
-            </select>
-          </div>
-          <div class="drawer-field">
-            <label for="drawerRatingSelect">Моя оценка</label>
-            <select id="drawerRatingSelect" class="drawer-select" data-drawer-rating="${item.id}">
-              ${ratingOptions}
-            </select>
-          </div>
+        <div class="drawer-section-title">Статус</div>
+        <div class="drawer-status-pills">${statusPillsHtml}</div>
+      </div>
+
+      <div class="drawer-section">
+        <div class="drawer-rating-head">
+          <div class="drawer-section-title">Моя оценка</div>
+          <div class="drawer-rating-value ${curRating ? "has-rating" : ""}" id="drawerRatingValue">${curRating ? `★ ${curRating} / 10` : "Без оценки"}</div>
         </div>
+        <div class="drawer-rating-scale">${ratingScaleHtml}</div>
       </div>
 
       ${summaryEditHtml}
@@ -991,9 +1188,8 @@
       ${readerHtml}
       ${tagsHtml}
 
-      <div class="drawer-actions-footer">
-        ${chatHtml}
-        ${deleteFooterHtml}
+      <div class="drawer-actions-footer" id="drawerActionsFooter">
+        ${buildDrawerActionsFooterHtml(item)}
       </div>
     `;
 
@@ -1015,15 +1211,21 @@
       if (targetIdx !== -1) {
         state.items[targetIdx] = fresh;
       }
-      const activeInDrawer = drawerBody.contains(document.activeElement);
-      if (Number(state.drawerItemId) === idNum && fresh.extracted_text && !activeInDrawer) {
-        renderDetailDrawer();
+      if (Number(state.drawerItemId) === idNum && fresh.extracted_text) {
+        const readerSlot = document.getElementById("drawerReaderSlot");
+        if (readerSlot) {
+          readerSlot.innerHTML = buildDrawerReaderHtml(fresh);
+        }
       }
     } catch {}
   }
 
   function openDetailDrawer(itemId) {
     closeStatusPopover();
+    closeRatingPopover();
+    if (state.drawerItemId !== null && Number(state.drawerItemId) !== Number(itemId)) {
+      flushPendingNoteSave();
+    }
     state.drawerItemId = Number(itemId);
     state.drawerConfirmDelete = false;
     state.drawerEditMode = false;
@@ -1035,6 +1237,7 @@
 
   function closeDetailDrawer() {
     if (state.drawerItemId === null) return;
+    flushPendingNoteSave();
     state.drawerItemId = null;
     state.drawerConfirmDelete = false;
     state.drawerEditMode = false;
@@ -1049,15 +1252,23 @@
     if (e.target === drawerOverlay) closeDetailDrawer();
   });
 
-  drawerBody.addEventListener("change", async (e) => {
-    const stSel = e.target.closest("[data-drawer-status]");
-    if (stSel) {
-      await patchItem(stSel.dataset.drawerStatus, { status: stSel.value });
-      return;
+  drawerBody.addEventListener("input", (e) => {
+    if (e.target && e.target.id === "drawerNoteInput") {
+      const inp = e.target;
+      const id = Number(inp.dataset.noteItemId || state.drawerItemId);
+      if (!id) return;
+      pendingNoteDraft = { itemId: id, value: inp.value };
+      setNoteSaveIndicator("Сохранение...");
+      clearTimeout(noteSaveTimer);
+      noteSaveTimer = setTimeout(() => {
+        flushPendingNoteSave();
+      }, 650);
     }
-    const rtSel = e.target.closest("[data-drawer-rating]");
-    if (rtSel) {
-      await patchItem(rtSel.dataset.drawerRating, { user_rating: Number(rtSel.value) });
+  });
+
+  drawerBody.addEventListener("focusout", (e) => {
+    if (e.target && e.target.id === "drawerNoteInput" && pendingNoteDraft) {
+      flushPendingNoteSave();
     }
   });
 
@@ -1088,9 +1299,34 @@
       return;
     }
 
+    const statusPill = e.target.closest("[data-drawer-status-btn]");
+    if (statusPill && statusPill.dataset.id) {
+      const nextStatus = statusPill.dataset.drawerStatusBtn;
+      haptic("selection");
+      await patchItem(statusPill.dataset.id, { status: nextStatus });
+      return;
+    }
+
+    const rateBtn = e.target.closest("[data-drawer-rate-btn]");
+    if (rateBtn && rateBtn.dataset.id) {
+      const id = Number(rateBtn.dataset.id);
+      const val = Number(rateBtn.dataset.drawerRateBtn);
+      const item = state.items.find((i) => Number(i.id) === id);
+      const nextRating = item && Number(item.user_rating || 0) === val ? 0 : val;
+      haptic("selection");
+      await patchItem(id, { user_rating: nextRating });
+      return;
+    }
+
     if (e.target.closest("[data-drawer-edit-toggle]")) {
       state.drawerEditMode = !state.drawerEditMode;
-      renderDetailDrawer();
+      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      const summarySlot = document.getElementById("drawerSummarySlot");
+      if (item && summarySlot) {
+        summarySlot.innerHTML = buildDrawerSummaryInnerHtml(item);
+      } else {
+        renderDetailDrawer();
+      }
       if (state.drawerEditMode) {
         setTimeout(() => {
           const inp = document.getElementById("drawerEditTitleInput");
@@ -1102,7 +1338,13 @@
 
     if (e.target.closest("[data-drawer-edit-cancel]")) {
       state.drawerEditMode = false;
-      renderDetailDrawer();
+      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      const summarySlot = document.getElementById("drawerSummarySlot");
+      if (item && summarySlot) {
+        summarySlot.innerHTML = buildDrawerSummaryInnerHtml(item);
+      } else {
+        renderDetailDrawer();
+      }
       return;
     }
 
@@ -1112,25 +1354,26 @@
       const tInp = document.getElementById("drawerEditTitleInput");
       const sInp = document.getElementById("drawerEditSummaryInput");
       state.drawerEditMode = false;
-      await patchItem(id, {
-        title_ru: tInp ? tInp.value : undefined,
-        summary: sInp ? sInp.value : undefined,
-      });
-      return;
-    }
-
-    const saveNoteBtn = e.target.closest("[data-drawer-save-note]");
-    if (saveNoteBtn) {
-      const id = saveNoteBtn.dataset.drawerSaveNote;
-      const noteInp = document.getElementById("drawerNoteInput");
-      saveNoteBtn.textContent = "Сохраняю...";
-      await patchItem(id, { user_note: noteInp ? noteInp.value : "" });
+      await patchItem(
+        id,
+        {
+          title_ru: tInp ? tInp.value : undefined,
+          summary: sInp ? sInp.value : undefined,
+        },
+        { syncSummary: true }
+      );
       return;
     }
 
     if (e.target.closest("[data-drawer-add-tag-toggle]")) {
       state.drawerAddTagMode = !state.drawerAddTagMode;
-      renderDetailDrawer();
+      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      const tagsSection = document.getElementById("drawerTagsSection");
+      if (item && tagsSection) {
+        tagsSection.innerHTML = buildDrawerTagsInnerHtml(item);
+      } else {
+        renderDetailDrawer();
+      }
       if (state.drawerAddTagMode) {
         setTimeout(() => {
           const inp = document.getElementById("drawerNewTagInput");
@@ -1177,13 +1420,17 @@
 
     if (e.target.closest("[data-drawer-delete-ask]")) {
       state.drawerConfirmDelete = true;
-      renderDetailDrawer();
+      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      const footer = document.getElementById("drawerActionsFooter");
+      if (item && footer) footer.innerHTML = buildDrawerActionsFooterHtml(item);
       return;
     }
 
     if (e.target.closest("[data-drawer-delete-cancel]")) {
       state.drawerConfirmDelete = false;
-      renderDetailDrawer();
+      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      const footer = document.getElementById("drawerActionsFooter");
+      if (item && footer) footer.innerHTML = buildDrawerActionsFooterHtml(item);
       return;
     }
 
@@ -1338,6 +1585,7 @@
 
   function openFiltersSheet() {
     closeStatusPopover();
+    closeRatingPopover();
     state.filtersSheetOpen = true;
     renderFiltersSheet();
     filtersSheetOverlay.classList.remove("hidden");
@@ -1386,7 +1634,6 @@
     const stBtn = e.target.closest("[data-sheet-status]");
     if (stBtn) {
       state.status = stBtn.dataset.sheetStatus;
-      document.getElementById("statusFilterSelect").value = state.status;
       syncNavigationState();
       renderFiltersSheet();
       loadItems();
@@ -1421,7 +1668,6 @@
       state.status = "all";
       state.sort = "created";
       state.tag = "";
-      document.getElementById("statusFilterSelect").value = "all";
       document.getElementById("sortSelect").value = "created";
       const mobSort = document.getElementById("mobileSortSelect");
       if (mobSort) mobSort.value = "created";
@@ -1554,6 +1800,12 @@
     });
   }
 
+  function getNextCycleStatus(curStatus) {
+    const order = ["inbox", "planned", "in_progress", "done"];
+    const idx = order.indexOf(curStatus || "inbox");
+    return order[(idx === -1 ? 0 : idx + 1) % order.length];
+  }
+
   function renderListRow(item) {
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     const catClass = `cat-${escapeHtml(item.category || "idea")}`;
@@ -1580,27 +1832,38 @@
     const tagsHtml = buildTagsLineHtml(item, "list-tags", "genre-pill list-tag-pill");
     const cornerSourceHtml = buildCornerSourceHtml(item);
     const desktopActionsHtml = buildCardActionsHtml(item, "list-actions");
-    const mobileActionsHtml = buildCardActionsHtml(item);
+    const mobileActionsHtml = buildCardActionsHtml(item, "mobile-inline");
+
+    const nextStatus = getNextCycleStatus(item.status);
+    const nextMeta = STATUS_META[nextStatus] || STATUS_META.planned;
 
     return `
-      <article class="list-row cat-accent ${catClass}" data-open-id="${item.id}">
-        <div class="list-poster">${posterHtml}</div>
-        <div class="list-main">
-          <div class="list-title-line">
-            <span class="list-title">${escapeHtml(item.title_ru)}</span>${yearHtml ? ` ${yearHtml}` : ""}${origHtml ? ` ${origHtml}` : ""}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}
+      <div class="swipe-row-wrap" data-swipe-id="${item.id}">
+        <div class="swipe-track swipe-track-left" aria-hidden="true">
+          <span style="display:inline-flex;">${nextMeta.svg}</span>
+          <span>→ ${escapeHtml(nextMeta.label)}</span>
+        </div>
+        <div class="swipe-track swipe-track-right" aria-hidden="true">
+          <span>Удалить</span>
+          ${UI_ICONS.trash}
+        </div>
+        <article class="list-row cat-accent ${catClass}" data-open-id="${item.id}">
+          <div class="list-poster">${posterHtml}</div>
+          <div class="list-main">
+            <div class="list-title-line">
+              <span class="list-title">${escapeHtml(item.title_ru)}</span>${yearHtml ? ` ${yearHtml}` : ""}${origHtml ? ` ${origHtml}` : ""}${cornerSourceHtml ? ` ${cornerSourceHtml}` : ""}
+            </div>
+            ${subParts.length ? `<div class="list-subline">${subParts.join(" · ")}</div>` : ""}
+            ${ratingsHtml ? `<div class="list-ratings">${ratingsHtml}</div>` : ""}
+            ${noteBadgeHtml}
+            ${tagsHtml}
+            <div class="list-mobile-actions">${mobileActionsHtml}</div>
           </div>
-          ${subParts.length ? `<div class="list-subline">${subParts.join(" · ")}</div>` : ""}
-          ${ratingsHtml ? `<div class="list-ratings">${ratingsHtml}</div>` : ""}
-          ${noteBadgeHtml}
-          ${tagsHtml}
-        </div>
-        <div class="list-right">
-          ${desktopActionsHtml}
-        </div>
-        <div class="list-mobile-footer">
-          ${mobileActionsHtml}
-        </div>
-      </article>
+          <div class="list-right">
+            ${desktopActionsHtml}
+          </div>
+        </article>
+      </div>
     `;
   }
 
@@ -1799,7 +2062,49 @@
     }
   }
 
-  function renderCatalog() {
+  function renderEmptyState() {
+    const empty = document.getElementById("emptyState");
+    if (!empty) return;
+    const emojiEl = document.getElementById("emptyStateEmoji");
+    const titleEl = document.getElementById("emptyStateTitle");
+    const descEl = document.getElementById("emptyStateDesc");
+    const actionsEl = document.getElementById("emptyStateActions");
+
+    const hasFilters = Boolean(
+      state.tab ||
+        state.q ||
+        (state.view === "catalog" && (state.status !== "all" || state.tag))
+    );
+
+    if (emojiEl) {
+      emojiEl.textContent = hasFilters ? "🔍" : "📖";
+    }
+    if (titleEl) {
+      titleEl.textContent =
+        state.view === "originals" ? "Оригиналов не найдено" : "Записей не найдено";
+    }
+    if (descEl) {
+      descEl.textContent = hasFilters
+        ? "Попробуйте изменить запрос или сбросить активные фильтры."
+        : "В этом разделе пока пусто. Добавьте фильм, книгу, ссылку или заметку прямо здесь.";
+    }
+    if (actionsEl) {
+      const btns = [];
+      if (hasFilters) {
+        btns.push(
+          `<button type="button" class="confirm-cancel-btn empty-cta-btn" id="emptyResetFiltersBtn">Сбросить фильтры</button>`
+        );
+      }
+      btns.push(
+        `<button type="button" class="auth-submit-btn empty-cta-btn" id="emptyAddItemBtn">+ Добавить запись</button>`
+      );
+      actionsEl.innerHTML = btns.join("");
+    }
+    empty.classList.remove("hidden");
+  }
+
+  function renderCatalog(opts = {}) {
+    const { skipDrawer = false } = opts;
     const container = document.getElementById("catalogContainer");
     const grid = document.getElementById("catalogGrid");
     const empty = document.getElementById("emptyState");
@@ -1811,7 +2116,7 @@
       if (container) container.classList.remove("kanban-wide");
       grid.className = "catalog-list";
       grid.innerHTML = "";
-      empty.classList.remove("hidden");
+      renderEmptyState();
       return;
     }
     empty.classList.add("hidden");
@@ -1834,7 +2139,7 @@
 
     applyMobileSingleLineTags();
 
-    if (state.drawerItemId !== null) {
+    if (!skipDrawer && state.drawerItemId !== null) {
       renderDetailDrawer();
     }
   }
@@ -1851,7 +2156,7 @@
     if (!state.originals.length) {
       grid.className = "catalog-list";
       grid.innerHTML = "";
-      empty.classList.remove("hidden");
+      renderEmptyState();
       return;
     }
     empty.classList.add("hidden");
@@ -1912,6 +2217,7 @@
   function setViewMode(mode) {
     if (!["list", "cards", "kanban"].includes(mode)) return;
     closeStatusPopover();
+    closeRatingPopover();
     state.viewMode = mode;
     localStorage.setItem("sb_view_mode", mode);
     syncNavigationState();
@@ -2129,8 +2435,15 @@
     }
   }
 
+  function showMobileTopbar() {
+    const tb = document.getElementById("topbar");
+    if (tb) tb.classList.remove("topbar-hidden");
+  }
+
   function refreshCurrentView() {
     closeStatusPopover();
+    closeRatingPopover();
+    showMobileTopbar();
     syncNavigationState();
     if (state.view === "originals") {
       loadOriginals();
@@ -2141,10 +2454,13 @@
     }
   }
 
-  async function patchItem(itemId, payload) {
+  async function patchItem(itemId, payload, opts = {}) {
     const numId = Number(itemId);
     const idx = state.items.findIndex((i) => Number(i.id) === numId);
     const prevSnapshot = idx !== -1 ? JSON.parse(JSON.stringify(state.items[idx])) : null;
+    const syncTags = payload.tags !== undefined;
+    const syncSummary = Boolean(opts.syncSummary);
+    const skipNoteInput = Boolean(opts.fromNoteAutosave);
 
     // Оптимистично обновляем UI мгновенно
     if (idx !== -1) {
@@ -2174,21 +2490,41 @@
       if (state.status === "all" && !state.tag && !state.q) {
         state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
       }
-      renderCatalog();
+      renderCatalog({ skipDrawer: true });
+      if (Number(state.drawerItemId) === numId) {
+        syncDetailDrawerInPlace(target, { skipNoteInput, syncTags, syncSummary });
+      }
     }
 
-    const res = await fetch(`/api/items/${numId}`, {
-      method: "PATCH",
-      headers: authHeaders(),
-      body: JSON.stringify(payload),
-    });
+    let res;
+    try {
+      res = await fetch(`/api/items/${numId}`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify(payload),
+        keepalive: Boolean(opts.keepalive),
+      });
+    } catch {
+      if (prevSnapshot && idx !== -1) {
+        state.items[idx] = prevSnapshot;
+        renderCatalog({ skipDrawer: true });
+        if (Number(state.drawerItemId) === numId) {
+          syncDetailDrawerInPlace(prevSnapshot, { skipNoteInput, syncTags, syncSummary });
+        }
+      }
+      return false;
+    }
+
     if (res.status === 401 || res.status === 403) {
       if (prevSnapshot && idx !== -1) {
         state.items[idx] = prevSnapshot;
-        renderCatalog();
+        renderCatalog({ skipDrawer: true });
+        if (Number(state.drawerItemId) === numId) {
+          syncDetailDrawerInPlace(prevSnapshot, { skipNoteInput, syncTags, syncSummary });
+        }
       }
       showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
-      return;
+      return false;
     }
     if (res.ok) {
       const updated = await res.json();
@@ -2199,16 +2535,24 @@
           state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
         }
         if (isDefaultCatalogQuery()) saveItemsCache();
-        renderCatalog();
+        renderCatalog({ skipDrawer: true });
+        if (Number(state.drawerItemId) === numId) {
+          syncDetailDrawerInPlace(updated, { skipNoteInput, syncTags, syncSummary });
+        }
       }
       if (payload.tags !== undefined) {
         loadTags();
       }
       haptic("light");
+      return true;
     } else if (prevSnapshot && idx !== -1) {
       state.items[idx] = prevSnapshot;
-      renderCatalog();
+      renderCatalog({ skipDrawer: true });
+      if (Number(state.drawerItemId) === numId) {
+        syncDetailDrawerInPlace(prevSnapshot, { skipNoteInput, syncTags, syncSummary });
+      }
     }
+    return false;
   }
 
   // ==================== БЕЗОПАСНОЕ УДАЛЕНИЕ С UNDO-ТОСТОМ ====================
@@ -2300,7 +2644,10 @@
     });
   }
 
-  window.addEventListener("pagehide", flushPendingDelete);
+  window.addEventListener("pagehide", () => {
+    flushPendingDelete();
+    flushPendingNoteSave({ keepalive: true });
+  });
 
   async function deleteItem(itemId) {
     const numId = Number(itemId);
@@ -2411,12 +2758,6 @@
   });
   document.getElementById("viewModeSwitchMobile").addEventListener("click", cycleViewMode);
 
-  document.getElementById("statusFilterSelect").addEventListener("change", (e) => {
-    state.status = e.target.value || "all";
-    syncNavigationState();
-    loadItems();
-  });
-
   document.getElementById("sortSelect").addEventListener("change", (e) => {
     state.sort = e.target.value;
     const mobSort = document.getElementById("mobileSortSelect");
@@ -2504,8 +2845,6 @@
       const stPill = e.target.closest("[data-status-pill]");
       if (stPill) {
         state.status = stPill.dataset.statusPill || "all";
-        const sel = document.getElementById("statusFilterSelect");
-        if (sel) sel.value = state.status;
         syncNavigationState();
         withViewTransition(() => loadItems());
         haptic("selection");
@@ -2584,6 +2923,7 @@
 
   function openQuickAddModal() {
     closeStatusPopover();
+    closeRatingPopover();
     closeFiltersSheet();
     closeCmdPalette();
     state.quickAddOpen = true;
@@ -2762,6 +3102,7 @@
 
   function openCmdPalette() {
     closeStatusPopover();
+    closeRatingPopover();
     state.cmdPaletteOpen = true;
     cmdActiveIndex = 0;
     if (cmdInput) cmdInput.value = "";
@@ -2887,11 +3228,14 @@
 
   (function bindMobileRowSwipe() {
     let rowEl = null;
+    let leftTrack = null;
+    let rightTrack = null;
     let itemId = null;
     let startX = 0;
     let startY = 0;
     let currentDx = 0;
     let locked = null;
+    let thresholdArmed = false;
 
     catalogGridEl.addEventListener(
       "touchstart",
@@ -2903,12 +3247,23 @@
         if (e.target.closest("a, button, select, option, .list-tags")) return;
         const row = e.target.closest(".list-row[data-open-id]");
         if (!row) return;
+        const wrap = row.closest(".swipe-row-wrap");
         rowEl = row;
+        leftTrack = wrap ? wrap.querySelector(".swipe-track-left") : null;
+        rightTrack = wrap ? wrap.querySelector(".swipe-track-right") : null;
         itemId = Number(row.dataset.openId);
         startX = x;
         startY = e.touches[0].clientY;
         currentDx = 0;
         locked = null;
+        thresholdArmed = false;
+
+        if (leftTrack) {
+          const it = state.items.find((i) => Number(i.id) === itemId);
+          const nextSt = getNextCycleStatus(it ? it.status : "inbox");
+          const nextMeta = STATUS_META[nextSt] || STATUS_META.planned;
+          leftTrack.innerHTML = `<span style="display:inline-flex;">${nextMeta.svg}</span><span>→ ${escapeHtml(nextMeta.label)}</span>`;
+        }
       },
       { passive: true }
     );
@@ -2927,12 +3282,29 @@
           } else {
             locked = "y";
             rowEl = null;
+            leftTrack = null;
+            rightTrack = null;
             return;
           }
         }
         if (locked === "x") {
           currentDx = Math.max(-120, Math.min(120, dx));
           rowEl.style.transform = `translateX(${currentDx}px)`;
+          if (leftTrack) {
+            leftTrack.classList.toggle("visible", currentDx > 10);
+            leftTrack.classList.toggle("armed", currentDx >= 75);
+          }
+          if (rightTrack) {
+            rightTrack.classList.toggle("visible", currentDx < -10);
+            rightTrack.classList.toggle("armed", currentDx <= -75);
+          }
+          const isArmedNow = Math.abs(currentDx) >= 75;
+          if (isArmedNow && !thresholdArmed) {
+            thresholdArmed = true;
+            haptic("medium");
+          } else if (!isArmedNow && thresholdArmed) {
+            thresholdArmed = false;
+          }
         }
       },
       { passive: true }
@@ -2941,23 +3313,27 @@
     const endSwipe = () => {
       if (!rowEl) return;
       const targetRow = rowEl;
+      const targetLeft = leftTrack;
+      const targetRight = rightTrack;
       const targetId = itemId;
       const dx = currentDx;
       const wasLockedX = locked === "x";
       rowEl = null;
+      leftTrack = null;
+      rightTrack = null;
       itemId = null;
       currentDx = 0;
       locked = null;
+      thresholdArmed = false;
       targetRow.classList.remove("swiping");
       targetRow.style.transform = "";
+      if (targetLeft) targetLeft.classList.remove("visible", "armed");
+      if (targetRight) targetRight.classList.remove("visible", "armed");
       if (!wasLockedX || !targetId) return;
 
       if (dx > 75) {
-        const order = ["inbox", "planned", "in_progress", "done"];
         const it = state.items.find((i) => Number(i.id) === targetId);
-        const curStatus = (it && it.status) || "inbox";
-        const idx = order.indexOf(curStatus);
-        const nextStatus = order[(idx === -1 ? 0 : idx + 1) % order.length];
+        const nextStatus = getNextCycleStatus(it ? it.status : "inbox");
         patchItem(targetId, { status: nextStatus });
       } else if (dx < -75) {
         deleteItem(targetId);
@@ -2976,10 +3352,18 @@
       return;
     }
 
+    const rtBtn = e.target.closest("[data-action='rating-menu']");
+    if (rtBtn && rtBtn.dataset.id) {
+      e.stopPropagation();
+      openRatingPopover(rtBtn.dataset.id, rtBtn);
+      return;
+    }
+
     const delBtn = e.target.closest("[data-action='delete']");
     if (delBtn && delBtn.dataset.id) {
       e.stopPropagation();
       closeStatusPopover();
+      closeRatingPopover();
       deleteItem(delBtn.dataset.id);
       return;
     }
@@ -3003,6 +3387,7 @@
     if (pill) {
       e.stopPropagation();
       closeStatusPopover();
+      closeRatingPopover();
       state.tag = pill.dataset.tag || "";
       syncNavigationState();
       renderTagBar();
@@ -3020,17 +3405,39 @@
     }
   });
 
-  catalogGridEl.addEventListener("change", (e) => {
-    const ratingSel = e.target.closest("select[data-action='rating']");
-    if (ratingSel && ratingSel.dataset.id) {
-      e.stopPropagation();
-      patchItem(ratingSel.dataset.id, { user_rating: Number(ratingSel.value) });
-    }
-  });
+  const emptyStateActionsEl = document.getElementById("emptyStateActions");
+  if (emptyStateActionsEl) {
+    emptyStateActionsEl.addEventListener("click", (e) => {
+      if (e.target.closest("#emptyResetFiltersBtn")) {
+        state.tab = "";
+        state.status = "all";
+        state.sort = "created";
+        state.tag = "";
+        state.q = "";
+        if (searchInput) {
+          searchInput.value = "";
+          syncSearchQueryState("");
+        }
+        const deskSort = document.getElementById("sortSelect");
+        if (deskSort) deskSort.value = "created";
+        const mobSort = document.getElementById("mobileSortSelect");
+        if (mobSort) mobSort.value = "created";
+        refreshCurrentView();
+        haptic("selection");
+        return;
+      }
+      if (e.target.closest("#emptyAddItemBtn")) {
+        openQuickAddModal();
+      }
+    });
+  }
 
   document.addEventListener("click", (e) => {
     if (!e.target.closest("#statusPopover") && !e.target.closest("[data-action='status-menu']")) {
       closeStatusPopover();
+    }
+    if (!e.target.closest("#ratingPopover") && !e.target.closest("[data-action='rating-menu']")) {
+      closeRatingPopover();
     }
   });
 
@@ -3044,6 +3451,7 @@
 
     if (e.key === "Escape") {
       closeStatusPopover();
+      closeRatingPopover();
       closePosterLightbox();
       closeCmdPalette();
       closeQuickAddModal();
@@ -3081,13 +3489,55 @@
 
   window.addEventListener("resize", () => {
     closeStatusPopover();
+    closeRatingPopover();
+    if (window.innerWidth > 820) showMobileTopbar();
     if (state.view === "catalog") {
       renderTagBar();
       applyMobileSingleLineTags();
     }
   });
 
-  window.addEventListener("scroll", closeStatusPopover, { passive: true });
+  (function initMobileAutoHideTopbar() {
+    const tb = document.getElementById("topbar");
+    if (!tb) return;
+    let lastScrollY = window.scrollY || 0;
+
+    window.addEventListener(
+      "scroll",
+      () => {
+        closeStatusPopover();
+        closeRatingPopover();
+        if (window.innerWidth > 820) {
+          tb.classList.remove("topbar-hidden");
+          lastScrollY = window.scrollY || 0;
+          return;
+        }
+        const y = window.scrollY || 0;
+        const isAnyOverlayOpen =
+          state.drawerItemId !== null ||
+          state.filtersSheetOpen ||
+          state.quickAddOpen ||
+          state.cmdPaletteOpen ||
+          document.activeElement === searchInput;
+
+        if (isAnyOverlayOpen || y < 48) {
+          tb.classList.remove("topbar-hidden");
+          lastScrollY = y;
+          return;
+        }
+
+        const delta = y - lastScrollY;
+        if (delta > 14) {
+          tb.classList.add("topbar-hidden");
+          lastScrollY = y;
+        } else if (delta < -8) {
+          tb.classList.remove("topbar-hidden");
+          lastScrollY = y;
+        }
+      },
+      { passive: true }
+    );
+  })();
 
   enableCarouselTouchScroll(document.getElementById("mobileCategoryTabs"));
   enableCarouselTouchScroll(document.getElementById("tagBar"));
