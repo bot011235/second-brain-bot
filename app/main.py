@@ -207,6 +207,7 @@ def api_list_items(
     q: str | None = Query(default=None),
     sort: str = Query(default="created"),
     limit: int = Query(default=200, ge=1, le=500),
+    smart: str | None = Query(default=None),
     _user: dict[str, Any] = Depends(require_tma_auth),
 ) -> dict[str, Any]:
     conn = get_connection()
@@ -219,6 +220,7 @@ def api_list_items(
             q=q,
             sort=sort,
             limit=limit,
+            smart=smart,
         )
         return {"items": items, "count": len(items), "tg_chat_id": settings.tg_chat_id}
     finally:

@@ -384,6 +384,138 @@ class TestStage6TMA(unittest.TestCase):
         finally:
             settings.llm_for_ideas = old_llm_ideas
 
+    def test_stage3_fts_search_multitags_and_smart_views(self) -> None:
+        from unittest.mock import patch
+        import app.main as main_mod
+
+        conn = get_connection(":memory:")
+        apply_migrations(conn)
+
+        class _NoCloseConn:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+            def close(self):
+                return None
+
+        # 1. Идеальный фильм в планах с высоким рейтингом (top_planned) + мульти-тегами + заметкой (noted)
+        it_top_movie = repo.create_item(
+            conn,
+            category="movie",
+            title_ru="Дюна: Часть вторая",
+            title_orig="Dune: Part Two",
+            status="planned",
+            rating_imdb=8.6,
+            rating_kp=8.3,
+            tags=["sci-fi", "classic", "imax"],
+        )
+        repo.update_item_fields(
+            conn,
+            it_top_movie["id"],
+            user_note="Пересмотреть на большом экране с кинематографичным звуком",
+        )
+
+        # 2. Фильм из inbox с высоким рейтингом (top_planned) и частичным пересечением тегов
+        it_inbox_movie = repo.create_item(
+            conn,
+            category="movie",
+            title_ru="Прибытие",
+            title_orig="Arrival",
+            status="inbox",
+            rating_imdb=7.9,
+            tags=["sci-fi"],
+        )
+
+        # 3. Завершённая книга с личной оценкой >= 8 (favorites)
+        it_fav_book = repo.create_item(
+            conn,
+            category="book",
+            title_ru="Гиперион",
+            creator="Дэн Симмонс",
+            status="done",
+            rating_imdb=4.3,
+            tags=["sci-fi", "classic"],
+        )
+        repo.update_item_fields(conn, it_fav_book["id"], user_rating=9)
+
+        # 4. Завершённая запись без личной оценки (unrated_done)
+        it_unrated_done = repo.create_item(
+            conn,
+            category="article",
+            title_ru="Эффективные паттерны локального поиска",
+            status="done",
+            tags=["dev"],
+        )
+
+        # 5. Запись с ошибкой обогащения (attention)
+        it_attention = repo.create_item(
+            conn,
+            category="movie",
+            title_ru="Неизвестный релиз",
+            status="inbox",
+            processing_status="failed",
+        )
+
+        try:
+            # FTS5 префиксный поиск по кириллице и user_note
+            note_hits = repo.list_items_catalog(conn, q="кинематограф")
+            self.assertEqual([x["id"] for x in note_hits], [it_top_movie["id"]])
+
+            # Поиск через #тег
+            hash_hits = repo.list_items_catalog(conn, q="#imax")
+            self.assertEqual([x["id"] for x in hash_hits], [it_top_movie["id"]])
+
+            # Мульти-теги с логикой AND (через запятую)
+            multi_tag_hits = repo.list_items_catalog(conn, tag="sci-fi,classic")
+            self.assertEqual(
+                {x["id"] for x in multi_tag_hits},
+                {it_top_movie["id"], it_fav_book["id"]},
+            )
+            self.assertNotIn(it_inbox_movie["id"], [x["id"] for x in multi_tag_hits])
+
+            # 5 умных представлений (Smart Views)
+            self.assertEqual(
+                {x["id"] for x in repo.list_items_catalog(conn, smart="top_planned")},
+                {it_top_movie["id"], it_inbox_movie["id"]},
+            )
+            self.assertEqual(
+                [x["id"] for x in repo.list_items_catalog(conn, smart="favorites")],
+                [it_fav_book["id"]],
+            )
+            self.assertEqual(
+                [x["id"] for x in repo.list_items_catalog(conn, smart="noted")],
+                [it_top_movie["id"]],
+            )
+            self.assertEqual(
+                [x["id"] for x in repo.list_items_catalog(conn, smart="unrated_done")],
+                [it_unrated_done["id"]],
+            )
+            self.assertEqual(
+                [x["id"] for x in repo.list_items_catalog(conn, smart="attention")],
+                [it_attention["id"]],
+            )
+
+            # Прямой вызов FastAPI-эндпоинта /api/items c smart="favorites"
+            wrapped = _NoCloseConn(conn)
+            with patch.object(main_mod, "get_connection", return_value=wrapped):
+                api_res = main_mod.api_list_items(
+                    tab=None,
+                    status=None,
+                    tag=None,
+                    q=None,
+                    sort="created",
+                    limit=200,
+                    smart="favorites",
+                    _user={"id": 349407845},
+                )
+            self.assertEqual(api_res["count"], 1)
+            self.assertEqual([x["id"] for x in api_res["items"]], [it_fav_book["id"]])
+        finally:
+            conn.close()
+
     def test_tma_static_ui_contract(self) -> None:
         import re
         import app.main as main_mod
@@ -394,20 +526,27 @@ class TestStage6TMA(unittest.TestCase):
         css = (tma_dir / "styles.css").read_text(encoding="utf-8")
         js = (tma_dir / "app.js").read_text(encoding="utf-8")
 
-        # 1. Версия ассетов v27, шрифт Literata, кнопка Постеры и удаление дубля фильтра статусов
-        self.assertIn("./styles.css?v=27", html)
-        self.assertIn("./app.js?v=27", html)
+        # 1. Версия ассетов v28, шрифт Literata, кнопка Постеры и удаление дубля фильтра статусов
+        self.assertIn("./styles.css?v=28", html)
+        self.assertIn("./app.js?v=28", html)
         self.assertIn("Literata", html)
         self.assertIn('data-mode="posters"', html)
         self.assertNotIn("statusFilterSelect", html)
         self.assertNotIn("statusFilterSelect", js)
+        self.assertIsNone(re.search(r"\bstate\.tag\b", js))
 
-        # 2. Ключевые элементы и стили Этапов 1 и 2 + Swipe 2.0 (v26–v27)
+        # 2. Ключевые элементы и стили Этапов 1–3 (v26–v28)
         for token in (
             'id="ratingPopover"',
             'id="emptyStateActions"',
             'id="emptyStateTitle"',
             'id="emptyStateDesc"',
+            'id="sidebarSmartViews"',
+            'id="activeSmartBanner"',
+            'id="drawerLuckyAgainBtn"',
+            'id="shortcutsOverlay"',
+            'id="shortcutsCloseBtn"',
+            'id="shortcutsHelpBtnDesktop"',
         ):
             self.assertIn(token, html)
 
@@ -431,6 +570,14 @@ class TestStage6TMA(unittest.TestCase):
             "card-video-thumb",
             "list-summary-snippet",
             "list-type-badge",
+            "active-smart-banner",
+            "drawer-triage-banner",
+            "kb-focused",
+            "shortcuts-modal",
+            "drawer-lucky-btn",
+            "triage-chip",
+            "cmd-loading-hint",
+            "chip-x",
         ):
             self.assertIn(token, css)
 
@@ -453,6 +600,19 @@ class TestStage6TMA(unittest.TestCase):
             "suppressSwipeClickUntil",
             "estimateReadingMinutes",
             "page_count",
+            "startInboxTriage",
+            "advanceInboxTriage",
+            "toggleSmartView",
+            "toggleTagFilter",
+            "renderActiveSmartBanner",
+            "syncStateToUrl",
+            "restoreStateFromUrl",
+            "fetchGlobalCmdItems",
+            "moveListFocus",
+            "openShortcutsModal",
+            "closeShortcutsModal",
+            "pickRandomItem",
+            "externalDrawerItem",
         ):
             self.assertIn(token, js)
 

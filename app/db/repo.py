@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.utils.normalize import normalize_text
@@ -59,7 +60,7 @@ def sync_item_fts(conn: Any, item_id: int) -> None:
     """Пересобирает строку в items_fts для указанного item_id."""
     conn.execute("DELETE FROM items_fts WHERE rowid = ?", (item_id,))
     cur = conn.execute(
-        "SELECT title_ru, title_orig, creator, summary FROM items WHERE id = ?",
+        "SELECT title_ru, title_orig, creator, summary, meta FROM items WHERE id = ?",
         (item_id,),
     )
     row = cur.fetchone()
@@ -67,12 +68,20 @@ def sync_item_fts(conn: Any, item_id: int) -> None:
         conn.commit()
         return
 
-    title_ru, title_orig, creator, summary = row
+    title_ru, title_orig, creator, summary, raw_meta = row
     tags_cur = conn.execute("SELECT tag FROM item_tags WHERE item_id = ?", (item_id,))
     tags_str = " ".join(r[0] for r in tags_cur.fetchall() if r[0])
 
     sources_cur = conn.execute("SELECT raw_text FROM item_sources WHERE item_id = ?", (item_id,))
-    sources_str = " ".join(r[0] for r in sources_cur.fetchall() if r[0])
+    sources_parts = [r[0] for r in sources_cur.fetchall() if r[0]]
+    if raw_meta:
+        try:
+            meta_obj = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
+            if isinstance(meta_obj, dict) and meta_obj.get("user_note"):
+                sources_parts.append(str(meta_obj["user_note"]))
+        except Exception:
+            pass
+    sources_str = " ".join(sources_parts)
 
     conn.execute(
         """
@@ -547,6 +556,7 @@ def update_item_fields(
             meta_dict.pop("user_note", None)
         meta_json = json.dumps(meta_dict, ensure_ascii=False) if meta_dict else None
         conn.execute("UPDATE items SET meta = ? WHERE id = ?", (meta_json, item_id))
+        fts_dirty = True
     if tags is not None:
         set_item_tags(conn, item_id, tags=tags, commit=False)
         fts_dirty = True
@@ -555,6 +565,18 @@ def update_item_fields(
     if fts_dirty:
         sync_item_fts(conn, item_id)
     return get_item(conn, item_id)
+
+
+def _build_fts_prefix_query(raw_q: str) -> str:
+    """Формирует безопасный FTS5 префиксный запрос без спецсимволов."""
+    cleaned = str(raw_q or "").replace("#", " ")
+    raw_tokens = re.findall(r"[\w]+", cleaned, flags=re.UNICODE)
+    if not raw_tokens:
+        return ""
+    tokens = [t for t in raw_tokens if len(t) >= 2]
+    if not tokens:
+        tokens = raw_tokens[:1]
+    return " AND ".join(f'"{t}"*' for t in tokens[:6])
 
 
 def list_items_catalog(
@@ -566,6 +588,7 @@ def list_items_catalog(
     q: str | None = None,
     sort: str = "created",
     limit: int = 200,
+    smart: str | None = None,
 ) -> list[dict[str, Any]]:
     """Выборка элементов для витрины Telegram Mini App с фильтрацией, поиском и сортировкой."""
     where_clauses: list[str] = []
@@ -584,22 +607,55 @@ def list_items_catalog(
     elif tab == "attention":
         where_clauses.append("i.processing_status <> 'ok'")
 
+    if smart == "top_planned":
+        where_clauses.append(
+            "i.status IN ('inbox', 'planned') AND ("
+            "COALESCE(i.rating_imdb, 0) >= 7.5 OR "
+            "COALESCE(i.rating_kp, 0) >= 7.5 OR "
+            "(i.category = 'book' AND COALESCE(i.rating_imdb, 0) >= 4.0)"
+            ")"
+        )
+    elif smart == "favorites":
+        where_clauses.append("COALESCE(i.user_rating, 0) >= 8")
+    elif smart == "noted":
+        where_clauses.append("i.meta LIKE '%\"user_note\"%'")
+    elif smart == "unrated_done":
+        where_clauses.append("i.status = 'done' AND i.user_rating IS NULL")
+    elif smart == "attention":
+        where_clauses.append("i.processing_status <> 'ok'")
+
     if status and status != "all":
         where_clauses.append("i.status = ?")
         params.append(status)
 
     if tag:
-        where_clauses.append("EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = i.id AND t.tag = ?)")
-        params.append(tag.strip().lower())
+        tag_list = [t.strip().lstrip("#").lower() for t in str(tag).split(",") if t.strip().lstrip("#")]
+        for t_val in tag_list:
+            where_clauses.append("EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = i.id AND t.tag = ?)")
+            params.append(t_val)
 
     if q and q.strip():
         norm_q = normalize_text(q)
         like_q = f"%{norm_q or q.strip().lower()}%"
         raw_like = f"%{q.strip()}%"
-        where_clauses.append(
-            "(i.normalized_title LIKE ? OR i.normalized_creator LIKE ? OR i.title_ru LIKE ? OR i.title_orig LIKE ? OR i.summary LIKE ?)"
-        )
-        params.extend([like_q, like_q, raw_like, raw_like, raw_like])
+        clean_tag_q = q.strip().lstrip("#").lower()
+        tag_like = f"%{clean_tag_q}%"
+        q_clauses = [
+            "i.normalized_title LIKE ?",
+            "i.normalized_creator LIKE ?",
+            "i.title_ru LIKE ?",
+            "i.title_orig LIKE ?",
+            "i.summary LIKE ?",
+            "i.meta LIKE ?",
+            "EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = i.id AND t.tag LIKE ?)",
+        ]
+        q_params: list[Any] = [like_q, like_q, raw_like, raw_like, raw_like, raw_like, tag_like]
+        fts_query = _build_fts_prefix_query(q)
+        if fts_query:
+            q_clauses.append("i.id IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)")
+            q_params.append(fts_query)
+        where_clauses.append("(" + " OR ".join(q_clauses) + ")")
+        params.extend(q_params)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 

@@ -125,6 +125,29 @@
     } catch {}
   }
 
+  const SMART_VIEWS_META = {
+    top_planned: {
+      label: "🔥 Топ к просмотру",
+      desc: "Входящие и запланированные с рейтингом от 7.5 (книги от 4.0)",
+    },
+    favorites: {
+      label: "⭐ Любимое (8+)",
+      desc: "Записи с вашей оценкой 8 и выше",
+    },
+    noted: {
+      label: "✍️ С заметками",
+      desc: "Записи с вашими личными заметками",
+    },
+    unrated_done: {
+      label: "🎯 Готово без оценки",
+      desc: "Завершённые записи, которым ещё не выставлена оценка",
+    },
+    attention: {
+      label: "⚠️ Требуют внимания",
+      desc: "Записи с ошибками или неполным обогащением",
+    },
+  };
+
   const state = {
     view: "catalog",
     viewMode: getViewModeForTab(""),
@@ -134,8 +157,9 @@
       ? "auto"
       : "light",
     tab: "",
+    smart: "",
     status: "all",
-    tag: "",
+    tags: [],
     q: "",
     sort: "created",
     items: [],
@@ -143,6 +167,7 @@
     allTags: [],
     tgChatId: 0,
     drawerItemId: null,
+    externalDrawerItem: null,
     drawerConfirmDelete: false,
     drawerEditMode: false,
     drawerAddTagMode: false,
@@ -151,9 +176,88 @@
     filtersSheetOpen: false,
     quickAddOpen: false,
     cmdPaletteOpen: false,
+    shortcutsOpen: false,
+    triageMode: false,
+    triageQueue: [],
+    triageTotal: 0,
+    triageProcessed: 0,
+    triageCompletedView: false,
+    luckyMode: false,
+    luckySeenIds: new Set(),
+    focusedIndex: -1,
     statusCountsByTab: {},
     expandedTagIds: new Set(),
   };
+
+  function findDrawerItem(itemId) {
+    const numId = Number(itemId);
+    const inList = state.items.find((i) => Number(i.id) === numId);
+    if (inList) return inList;
+    if (state.externalDrawerItem && Number(state.externalDrawerItem.id) === numId) {
+      return state.externalDrawerItem;
+    }
+    return null;
+  }
+
+  function syncStateToUrl({ push = false } = {}) {
+    try {
+      const params = new URLSearchParams();
+      if (state.view && state.view !== "catalog") params.set("view", state.view);
+      if (state.tab) params.set("tab", state.tab);
+      if (state.smart) params.set("smart", state.smart);
+      if (state.status && state.status !== "all") params.set("status", state.status);
+      if (state.tags.length) params.set("tags", state.tags.join(","));
+      if (state.q) params.set("q", state.q);
+      if (state.sort && state.sort !== "created") params.set("sort", state.sort);
+      if (state.drawerItemId !== null && !state.triageCompletedView) {
+        params.set("item", String(state.drawerItemId));
+      }
+      const qs = params.toString();
+      const nextUrl = window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash;
+      const curUrl = window.location.pathname + window.location.search + window.location.hash;
+      if (nextUrl === curUrl) return;
+      if (push) {
+        window.history.pushState({ sb: true }, "", nextUrl);
+      } else {
+        window.history.replaceState({ sb: true }, "", nextUrl);
+      }
+    } catch {}
+  }
+
+  function restoreStateFromUrl() {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      const viewP = p.get("view");
+      state.view = viewP === "originals" ? "originals" : "catalog";
+      state.tab = p.get("tab") || "";
+      const smartP = p.get("smart") || "";
+      state.smart = SMART_VIEWS_META[smartP] ? smartP : "";
+      const stP = p.get("status") || "all";
+      state.status = ["all", "inbox", "planned", "in_progress", "done", "dropped"].includes(stP) ? stP : "all";
+      const rawTags = p.get("tags") || p.get("tag") || "";
+      state.tags = rawTags
+        ? [...new Set(rawTags.split(",").map((t) => t.trim().replace(/^#+/, "").toLowerCase()).filter(Boolean))]
+        : [];
+      state.q = (p.get("q") || "").trim();
+      const sortP = p.get("sort") || "created";
+      state.sort = ["created", "imdb", "kp", "rt", "user"].includes(sortP) ? sortP : "created";
+      const modeP = p.get("mode") || "";
+      state.viewMode = VALID_VIEW_MODES.includes(modeP) ? modeP : getViewModeForTab(state.tab);
+
+      const sInp = document.getElementById("searchInput");
+      if (sInp) sInp.value = state.q;
+      const dSort = document.getElementById("sortSelect");
+      if (dSort) dSort.value = state.sort;
+      const mSort = document.getElementById("mobileSortSelect");
+      if (mSort) mSort.value = state.sort;
+
+      const itemP = p.get("item");
+      const itemId = itemP && /^\d+$/.test(itemP) ? Number(itemP) : null;
+      return itemId;
+    } catch {
+      return null;
+    }
+  }
 
   let itemsAbort = null;
   let tagsAbort = null;
@@ -850,6 +954,8 @@
   const drawerCategoryLabel = document.getElementById("drawerCategoryLabel");
   const drawerPrevBtn = document.getElementById("drawerPrevBtn");
   const drawerNextBtn = document.getElementById("drawerNextBtn");
+  const drawerLuckyAgainBtn = document.getElementById("drawerLuckyAgainBtn");
+  const shortcutsOverlay = document.getElementById("shortcutsOverlay");
   const posterLightbox = document.getElementById("posterLightbox");
   const lightboxImg = document.getElementById("lightboxImg");
 
@@ -883,6 +989,7 @@
       const lightboxOpen = posterLightbox && !posterLightbox.classList.contains("hidden");
       if (
         lightboxOpen ||
+        state.shortcutsOpen ||
         state.cmdPaletteOpen ||
         state.quickAddOpen ||
         state.drawerItemId !== null ||
@@ -900,6 +1007,8 @@
       tg.BackButton.onClick(() => {
         if (posterLightbox && !posterLightbox.classList.contains("hidden")) {
           closePosterLightbox();
+        } else if (state.shortcutsOpen) {
+          closeShortcutsModal();
         } else if (state.cmdPaletteOpen) {
           closeCmdPalette();
         } else if (state.quickAddOpen) {
@@ -1135,6 +1244,52 @@
     return `${chatHtml}${deleteFooterHtml}`;
   }
 
+  async function startInboxTriage() {
+    closeStatusPopover();
+    closeRatingPopover();
+    closeOpenSwipeRow();
+    state.smart = "";
+    state.view = "catalog";
+    state.status = "inbox";
+    state.viewMode = getViewModeForTab(state.tab);
+    syncNavigationState();
+    syncStateToUrl({ push: true });
+    await loadItems();
+    const queue = state.items
+      .filter((i) => (i.status || "inbox") === "inbox")
+      .map((i) => Number(i.id));
+    if (!queue.length) return;
+
+    state.triageMode = true;
+    state.triageQueue = queue;
+    state.triageTotal = queue.length;
+    state.triageProcessed = 0;
+    state.triageCompletedView = false;
+    state.luckyMode = false;
+    openDetailDrawer(queue[0], { keepTriage: true });
+  }
+
+  function advanceInboxTriage({ processed = true, currentId = null } = {}) {
+    if (!state.triageMode) return;
+    if (currentId !== null) {
+      const curNum = Number(currentId);
+      state.triageQueue = state.triageQueue.filter((id) => Number(id) !== curNum);
+    } else if (state.triageQueue.length) {
+      state.triageQueue.shift();
+    }
+    if (processed) {
+      state.triageProcessed += 1;
+    }
+    if (state.triageQueue.length > 0) {
+      openDetailDrawer(state.triageQueue[0], { keepTriage: true, replaceUrl: true });
+    } else {
+      state.triageCompletedView = true;
+      renderDetailDrawer();
+      syncStateToUrl({ push: false });
+      haptic("medium");
+    }
+  }
+
   function navigateDrawer(delta) {
     if (state.drawerItemId === null || !state.items.length) return;
     flushPendingNoteSave();
@@ -1142,7 +1297,11 @@
     if (idx === -1) return;
     const target = state.items[idx + delta];
     if (target) {
-      openDetailDrawer(target.id);
+      openDetailDrawer(target.id, {
+        keepTriage: state.triageMode,
+        keepLucky: state.luckyMode,
+        replaceUrl: true,
+      });
     }
   }
 
@@ -1201,24 +1360,48 @@
   }
 
   function renderDetailDrawer() {
-    if (state.drawerItemId === null) {
+    if (state.drawerItemId === null && !state.triageCompletedView) {
       drawerOverlay.classList.add("hidden");
       drawerOverlay.setAttribute("aria-hidden", "true");
       drawerBody.innerHTML = "";
       delete drawerBody.dataset.renderedItemId;
+      if (drawerLuckyAgainBtn) drawerLuckyAgainBtn.classList.add("hidden");
+      syncTelegramBackButton();
+      return;
+    }
+
+    if (state.triageCompletedView) {
+      drawerCategoryLabel.textContent = "Разбор входящих";
+      if (drawerPrevBtn) drawerPrevBtn.disabled = true;
+      if (drawerNextBtn) drawerNextBtn.disabled = true;
+      if (drawerLuckyAgainBtn) drawerLuckyAgainBtn.classList.add("hidden");
+      delete drawerBody.dataset.renderedItemId;
+      drawerBody.innerHTML = `
+        <div class="triage-done-card">
+          <div class="triage-done-emoji">🎉</div>
+          <h3>Все входящие разобраны!</h3>
+          <p>Обработано записей: <b>${state.triageProcessed}</b>. Порядок наведён.</p>
+          <button type="button" class="auth-submit-btn empty-cta-btn" data-triage-exit>Закрыть и вернуться</button>
+        </div>
+      `;
+      drawerOverlay.classList.remove("hidden");
+      drawerOverlay.setAttribute("aria-hidden", "false");
       syncTelegramBackButton();
       return;
     }
 
     const idx = state.items.findIndex((i) => Number(i.id) === Number(state.drawerItemId));
-    const item = idx !== -1 ? state.items[idx] : null;
+    const item = idx !== -1 ? state.items[idx] : findDrawerItem(state.drawerItemId);
     if (!item) {
       closeDetailDrawer();
       return;
     }
 
     if (drawerPrevBtn) drawerPrevBtn.disabled = idx <= 0;
-    if (drawerNextBtn) drawerNextBtn.disabled = idx >= state.items.length - 1;
+    if (drawerNextBtn) drawerNextBtn.disabled = idx === -1 || idx >= state.items.length - 1;
+    if (drawerLuckyAgainBtn) {
+      drawerLuckyAgainBtn.classList.toggle("hidden", !(state.luckyMode && !state.triageMode));
+    }
 
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
     drawerCategoryLabel.textContent = CATEGORY_TITLES[item.category] || "Запись";
@@ -1310,8 +1493,35 @@
       })
       .join("");
 
+    const triageBannerHtml = state.triageMode
+      ? (() => {
+          const total = Math.max(1, state.triageTotal);
+          const curNum = Math.min(total, state.triageProcessed + 1);
+          const pct = Math.min(100, Math.round((state.triageProcessed / total) * 100));
+          return `
+            <div class="drawer-triage-banner">
+              <div class="triage-top-row">
+                <span>⚡ Разбор входящих</span>
+                <span>${curNum} из ${total}</span>
+              </div>
+              <div class="triage-progress-track">
+                <div class="triage-progress-fill" style="width:${pct}%"></div>
+              </div>
+              <div class="triage-actions-row">
+                <span class="triage-kbd-hint">1 Планы · 2 Процесс · 3 Готово · 4 Брошено · S Пропуск</span>
+                <div class="triage-btns">
+                  <button type="button" class="triage-mini-btn" data-triage-skip>Пропустить →</button>
+                  <button type="button" class="triage-mini-btn" data-triage-exit>Выйти</button>
+                </div>
+              </div>
+            </div>
+          `;
+        })()
+      : "";
+
     drawerBody.dataset.renderedItemId = String(item.id);
     drawerBody.innerHTML = `
+      ${triageBannerHtml}
       <div class="drawer-hero">
         <div class="drawer-poster">${posterHtml}</div>
         <div style="min-width:0;flex:1;">
@@ -1358,7 +1568,7 @@
 
   async function hydrateDrawerFullText(itemId) {
     const idNum = Number(itemId);
-    const localItem = state.items.find((i) => Number(i.id) === idNum);
+    const localItem = findDrawerItem(idNum);
     if (!localItem || localItem.extracted_text !== undefined) return;
     if (!["post", "article", "video", "idea"].includes(localItem.category)) return;
     try {
@@ -1368,6 +1578,8 @@
       const targetIdx = state.items.findIndex((i) => Number(i.id) === idNum);
       if (targetIdx !== -1) {
         state.items[targetIdx] = fresh;
+      } else if (state.externalDrawerItem && Number(state.externalDrawerItem.id) === idNum) {
+        state.externalDrawerItem = fresh;
       }
       if (Number(state.drawerItemId) === idNum && fresh.extracted_text) {
         const readerSlot = document.getElementById("drawerReaderSlot");
@@ -1384,33 +1596,77 @@
     } catch {}
   }
 
-  function openDetailDrawer(itemId) {
+  function openDetailDrawer(itemId, opts = {}) {
+    const { keepTriage = false, keepLucky = false, fallbackItem = null, skipUrlSync = false, replaceUrl = false } = opts;
+    const numId = Number(itemId);
+    const wasClosed = state.drawerItemId === null;
     closeStatusPopover();
     closeRatingPopover();
     closeOpenSwipeRow();
-    if (state.drawerItemId !== null && Number(state.drawerItemId) !== Number(itemId)) {
+    if (state.drawerItemId !== null && Number(state.drawerItemId) !== numId) {
       flushPendingNoteSave();
     }
-    state.drawerItemId = Number(itemId);
+    if (!keepTriage) {
+      state.triageMode = false;
+      state.triageCompletedView = false;
+    }
+    if (!keepLucky) {
+      state.luckyMode = false;
+    }
+    if (fallbackItem && !state.items.some((i) => Number(i.id) === numId)) {
+      state.externalDrawerItem = fallbackItem;
+    }
+    state.drawerItemId = numId;
     state.drawerConfirmDelete = false;
     state.drawerEditMode = false;
     state.drawerAddTagMode = false;
     renderDetailDrawer();
-    hydrateDrawerFullText(itemId);
+    hydrateDrawerFullText(numId);
+    if (!skipUrlSync) {
+      syncStateToUrl({ push: wasClosed && !replaceUrl });
+    }
     haptic("light");
   }
 
-  function closeDetailDrawer() {
-    if (state.drawerItemId === null) return;
+  async function openItemById(itemId, opts = {}) {
+    const numId = Number(itemId);
+    if (!numId) return;
+    const existing = findDrawerItem(numId);
+    if (existing) {
+      openDetailDrawer(numId, opts);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/items/${numId}`, { headers: authHeaders() });
+      if (!res.ok) return;
+      const item = await res.json();
+      if (item && item.id) {
+        openDetailDrawer(item.id, { ...opts, fallbackItem: item });
+      }
+    } catch {}
+  }
+
+  function closeDetailDrawer(opts = {}) {
+    if (state.drawerItemId === null && !state.triageCompletedView) return;
     flushPendingNoteSave();
     state.drawerItemId = null;
+    state.externalDrawerItem = null;
     state.drawerConfirmDelete = false;
     state.drawerEditMode = false;
     state.drawerAddTagMode = false;
+    state.triageMode = false;
+    state.triageCompletedView = false;
+    state.luckyMode = false;
     renderDetailDrawer();
+    if (!opts.skipUrlSync) {
+      syncStateToUrl({ push: false });
+    }
   }
 
-  document.getElementById("drawerCloseBtn").addEventListener("click", closeDetailDrawer);
+  document.getElementById("drawerCloseBtn").addEventListener("click", () => closeDetailDrawer());
+  if (drawerLuckyAgainBtn) {
+    drawerLuckyAgainBtn.addEventListener("click", () => pickRandomItem({ fromDrawer: true }));
+  }
   if (drawerPrevBtn) drawerPrevBtn.addEventListener("click", () => navigateDrawer(-1));
   if (drawerNextBtn) drawerNextBtn.addEventListener("click", () => navigateDrawer(1));
   drawerOverlay.addEventListener("click", (e) => {
@@ -1446,6 +1702,16 @@
   });
 
   drawerBody.addEventListener("click", async (e) => {
+    if (e.target.closest("[data-triage-skip]")) {
+      advanceInboxTriage({ processed: false, currentId: state.drawerItemId });
+      return;
+    }
+
+    if (e.target.closest("[data-triage-exit]")) {
+      closeDetailDrawer();
+      return;
+    }
+
     const posterImg = e.target.closest("[data-lightbox-src]");
     if (posterImg) {
       openPosterLightbox(posterImg.dataset.lightboxSrc, posterImg.alt || "");
@@ -1466,9 +1732,13 @@
 
     const statusPill = e.target.closest("[data-drawer-status-btn]");
     if (statusPill && statusPill.dataset.id) {
+      const id = Number(statusPill.dataset.id);
       const nextStatus = statusPill.dataset.drawerStatusBtn;
       haptic("selection");
-      await patchItem(statusPill.dataset.id, { status: nextStatus });
+      await patchItem(id, { status: nextStatus });
+      if (state.triageMode && nextStatus !== "inbox") {
+        advanceInboxTriage({ processed: true, currentId: id });
+      }
       return;
     }
 
@@ -1476,7 +1746,7 @@
     if (rateBtn && rateBtn.dataset.id) {
       const id = Number(rateBtn.dataset.id);
       const val = Number(rateBtn.dataset.drawerRateBtn);
-      const item = state.items.find((i) => Number(i.id) === id);
+      const item = findDrawerItem(id);
       const nextRating = item && Number(item.user_rating || 0) === val ? 0 : val;
       haptic("selection");
       await patchItem(id, { user_rating: nextRating });
@@ -1485,7 +1755,7 @@
 
     if (e.target.closest("[data-drawer-edit-toggle]")) {
       state.drawerEditMode = !state.drawerEditMode;
-      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      const item = findDrawerItem(state.drawerItemId);
       const summarySlot = document.getElementById("drawerSummarySlot");
       if (item && summarySlot) {
         summarySlot.innerHTML = buildDrawerSummaryInnerHtml(item);
@@ -1503,7 +1773,7 @@
 
     if (e.target.closest("[data-drawer-edit-cancel]")) {
       state.drawerEditMode = false;
-      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      const item = findDrawerItem(state.drawerItemId);
       const summarySlot = document.getElementById("drawerSummarySlot");
       if (item && summarySlot) {
         summarySlot.innerHTML = buildDrawerSummaryInnerHtml(item);
@@ -1532,7 +1802,7 @@
 
     if (e.target.closest("[data-drawer-add-tag-toggle]")) {
       state.drawerAddTagMode = !state.drawerAddTagMode;
-      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      const item = findDrawerItem(state.drawerItemId);
       const tagsSection = document.getElementById("drawerTagsSection");
       if (item && tagsSection) {
         tagsSection.innerHTML = buildDrawerTagsInnerHtml(item);
@@ -1553,7 +1823,7 @@
       const id = Number(addTagSubmit.dataset.drawerAddTagSubmit);
       const inp = document.getElementById("drawerNewTagInput");
       const cleanTag = (inp ? inp.value : "").replace(/^#+/, "").trim().toLowerCase();
-      const item = state.items.find((i) => Number(i.id) === id);
+      const item = findDrawerItem(id);
       if (cleanTag && item) {
         const nextTags = [...new Set([...(item.tags || []), cleanTag])];
         state.drawerAddTagMode = false;
@@ -1566,7 +1836,7 @@
     if (remTagBtn) {
       e.stopPropagation();
       const tagToRemove = (remTagBtn.dataset.removeTag || "").toLowerCase();
-      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      const item = findDrawerItem(state.drawerItemId);
       if (item && tagToRemove) {
         const nextTags = (item.tags || []).filter((t) => String(t).toLowerCase() !== tagToRemove);
         await patchItem(item.id, { tags: nextTags });
@@ -1576,16 +1846,14 @@
 
     const tagEl = e.target.closest("[data-drawer-tag]");
     if (tagEl) {
-      state.tag = tagEl.dataset.drawerTag || "";
       closeDetailDrawer();
-      renderTagBar();
-      loadItems();
+      toggleTagFilter(tagEl.dataset.drawerTag || "");
       return;
     }
 
     if (e.target.closest("[data-drawer-delete-ask]")) {
       state.drawerConfirmDelete = true;
-      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      const item = findDrawerItem(state.drawerItemId);
       const footer = document.getElementById("drawerActionsFooter");
       if (item && footer) footer.innerHTML = buildDrawerActionsFooterHtml(item);
       return;
@@ -1593,7 +1861,7 @@
 
     if (e.target.closest("[data-drawer-delete-cancel]")) {
       state.drawerConfirmDelete = false;
-      const item = state.items.find((i) => Number(i.id) === Number(state.drawerItemId));
+      const item = findDrawerItem(state.drawerItemId);
       const footer = document.getElementById("drawerActionsFooter");
       if (item && footer) footer.innerHTML = buildDrawerActionsFooterHtml(item);
       return;
@@ -1601,9 +1869,15 @@
 
     const delConfirm = e.target.closest("[data-drawer-delete-confirm]");
     if (delConfirm) {
-      const id = delConfirm.dataset.drawerDeleteConfirm;
-      closeDetailDrawer();
-      await deleteItem(id);
+      const id = Number(delConfirm.dataset.drawerDeleteConfirm);
+      const wasTriage = state.triageMode;
+      if (wasTriage) {
+        await deleteItem(id);
+        advanceInboxTriage({ processed: true, currentId: id });
+      } else {
+        closeDetailDrawer();
+        await deleteItem(id);
+      }
     }
   });
 
@@ -1611,6 +1885,60 @@
 
   const filtersSheetOverlay = document.getElementById("filtersSheetOverlay");
   const filtersSheetBody = document.getElementById("filtersSheetBody");
+
+  function toggleTagFilter(rawTag) {
+    const normalized = String(rawTag || "").replace(/^#+/, "").trim().toLowerCase();
+    if (!normalized) {
+      state.tags = [];
+    } else if (state.tags.includes(normalized)) {
+      state.tags = state.tags.filter((t) => t !== normalized);
+    } else {
+      state.tags = [...state.tags, normalized];
+    }
+    if (state.view !== "catalog") {
+      state.view = "catalog";
+    }
+    syncNavigationState();
+    renderTagBar();
+    if (state.filtersSheetOpen) renderFiltersSheet();
+    syncStateToUrl({ push: true });
+    loadItems();
+  }
+
+  function toggleSmartView(smartKey) {
+    const key = SMART_VIEWS_META[smartKey] ? smartKey : "";
+    if (!key || state.smart === key) {
+      state.smart = "";
+    } else {
+      state.smart = key;
+      state.view = "catalog";
+      state.status = "all";
+    }
+    syncNavigationState();
+    renderActiveSmartBanner();
+    if (state.filtersSheetOpen) renderFiltersSheet();
+    syncStateToUrl({ push: true });
+    loadItems();
+  }
+
+  function renderActiveSmartBanner() {
+    const banner = document.getElementById("activeSmartBanner");
+    if (!banner) return;
+    const meta = state.smart ? SMART_VIEWS_META[state.smart] : null;
+    if (state.view !== "catalog" || !meta) {
+      banner.classList.add("hidden");
+      banner.innerHTML = "";
+      return;
+    }
+    banner.classList.remove("hidden");
+    banner.innerHTML = `
+      <div class="active-smart-meta">
+        <span>${escapeHtml(meta.label)}</span>
+        <span class="active-smart-desc">${escapeHtml(meta.desc)}</span>
+      </div>
+      <button type="button" class="smart-banner-clear" id="clearSmartViewBtn">Сбросить</button>
+    `;
+  }
 
   function renderFiltersSheet() {
     const categoryOpts = [
@@ -1621,6 +1949,7 @@
       { v: "article", l: "📰 Статьи" },
       { v: "ideas", l: "💡 Идеи" },
     ];
+    const smartOpts = Object.entries(SMART_VIEWS_META).map(([v, m]) => ({ v, l: m.label }));
     const tabCounts = state.statusCountsByTab[state.tab || ""] || null;
     const statusOpts = [
       { v: "all", l: "Все" },
@@ -1686,6 +2015,18 @@
         state.view === "catalog"
           ? `
         <div class="drawer-section">
+          <div class="drawer-section-title">Умные списки</div>
+          <div class="sheet-pills-grid">
+            ${smartOpts
+              .map(
+                (sm) =>
+                  `<button type="button" class="sheet-pill ${state.smart === sm.v ? "active" : ""}" data-sheet-smart="${sm.v}">${escapeHtml(sm.l)}</button>`
+              )
+              .join("")}
+          </div>
+        </div>
+
+        <div class="drawer-section">
           <div class="drawer-section-title">Категория</div>
           <div class="sheet-pills-grid">
             ${categoryOpts
@@ -1715,11 +2056,11 @@
         <div class="drawer-section">
           <div class="drawer-section-title">Теги</div>
           <div class="sheet-pills-grid sheet-tags-grid">
-            <button type="button" class="sheet-pill ${state.tag === "" ? "active" : ""}" data-sheet-tag="">Все теги</button>
+            <button type="button" class="sheet-pill ${state.tags.length === 0 ? "active" : ""}" data-sheet-tag="">Все теги</button>
             ${sortedTags
               .map(
                 (t) =>
-                  `<button type="button" class="sheet-pill ${state.tag === t.tag ? "active" : ""}" data-sheet-tag="${escapeHtml(t.tag)}">#${escapeHtml(t.tag)} (${t.count})</button>`
+                  `<button type="button" class="sheet-pill ${state.tags.includes(String(t.tag).toLowerCase()) ? "active" : ""}" data-sheet-tag="${escapeHtml(t.tag)}">#${escapeHtml(t.tag)} (${t.count})</button>`
               )
               .join("")}
           </div>
@@ -1788,11 +2129,19 @@
       return;
     }
 
+    const smartBtn = e.target.closest("[data-sheet-smart]");
+    if (smartBtn) {
+      toggleSmartView(smartBtn.dataset.sheetSmart || "");
+      haptic("selection");
+      return;
+    }
+
     const tabBtn = e.target.closest("[data-sheet-tab]");
     if (tabBtn) {
       state.tab = tabBtn.dataset.sheetTab || "";
-      state.tag = "";
+      state.tags = [];
       state.viewMode = getViewModeForTab(state.tab);
+      syncStateToUrl({ push: true });
       refreshCurrentView();
       renderFiltersSheet();
       haptic("selection");
@@ -1804,18 +2153,15 @@
       state.status = stBtn.dataset.sheetStatus;
       syncNavigationState();
       renderFiltersSheet();
+      syncStateToUrl({ push: true });
       loadItems();
       return;
     }
 
     const tagBtn = e.target.closest("[data-sheet-tag]");
     if (tagBtn) {
-      const clickedTag = tagBtn.dataset.sheetTag || "";
-      state.tag = state.tag === clickedTag && clickedTag !== "" ? "" : clickedTag;
-      syncNavigationState();
-      renderTagBar();
-      renderFiltersSheet();
-      loadItems();
+      toggleTagFilter(tagBtn.dataset.sheetTag || "");
+      haptic("selection");
       return;
     }
 
@@ -1827,19 +2173,22 @@
       if (mobSort) mobSort.value = state.sort;
       syncNavigationState();
       renderFiltersSheet();
+      syncStateToUrl({ push: true });
       loadItems();
       return;
     }
 
     if (e.target.id === "sheetResetFiltersBtn") {
       state.tab = "";
+      state.smart = "";
       state.status = "all";
       state.sort = "created";
-      state.tag = "";
+      state.tags = [];
       state.viewMode = getViewModeForTab("");
       document.getElementById("sortSelect").value = "created";
       const mobSort = document.getElementById("mobileSortSelect");
       if (mobSort) mobSort.value = "created";
+      syncStateToUrl({ push: true });
       refreshCurrentView();
       renderFiltersSheet();
     }
@@ -1850,7 +2199,7 @@
   function renderTagBar() {
     const container = document.getElementById("tagBar");
     const sorted = [...state.allTags].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
-    if (!sorted.length) {
+    if (!sorted.length && !state.tags.length) {
       container.innerHTML = "";
       return;
     }
@@ -1858,29 +2207,40 @@
     const isMobile = window.innerWidth <= 820;
     const maxInline = isMobile ? 7 : 12;
 
-    let inlineTags = sorted.slice(0, maxInline);
+    const inlineTags = sorted.slice(0, maxInline);
     const overflowTags = sorted.slice(maxInline);
 
-    if (state.tag && !inlineTags.some((t) => t.tag === state.tag)) {
-      const activeIdx = overflowTags.findIndex((t) => t.tag === state.tag);
-      if (activeIdx !== -1) {
-        const [activeItem] = overflowTags.splice(activeIdx, 1);
-        inlineTags.push(activeItem);
+    state.tags.forEach((activeTag) => {
+      if (!inlineTags.some((t) => String(t.tag).toLowerCase() === activeTag)) {
+        const activeIdx = overflowTags.findIndex((t) => String(t.tag).toLowerCase() === activeTag);
+        if (activeIdx !== -1) {
+          const [activeItem] = overflowTags.splice(activeIdx, 1);
+          inlineTags.push(activeItem);
+        }
       }
-    }
+    });
 
-    let html = `<button type="button" class="chip ${state.tag === "" ? "active" : ""}" data-tag="">Все теги</button>`;
+    const extraUnknownTags = state.tags.filter(
+      (activeTag) => !sorted.some((t) => String(t.tag).toLowerCase() === activeTag)
+    );
+
+    let html = `<button type="button" class="chip ${state.tags.length === 0 ? "active" : ""}" data-tag="">Все теги</button>`;
     inlineTags.forEach((t) => {
-      const isAct = state.tag === t.tag ? "active" : "";
-      html += `<button type="button" class="chip ${isAct}" data-tag="${escapeHtml(t.tag)}">${escapeHtml(t.tag)} (${t.count})</button>`;
+      const norm = String(t.tag).toLowerCase();
+      const isAct = state.tags.includes(norm);
+      const closeX = isAct ? `<span class="chip-x" aria-hidden="true">×</span>` : "";
+      html += `<button type="button" class="chip ${isAct ? "active" : ""}" data-tag="${escapeHtml(t.tag)}">${escapeHtml(t.tag)} (${t.count})${closeX}</button>`;
+    });
+    extraUnknownTags.forEach((tagName) => {
+      html += `<button type="button" class="chip active" data-tag="${escapeHtml(tagName)}">${escapeHtml(tagName)}<span class="chip-x" aria-hidden="true">×</span></button>`;
     });
 
     if (overflowTags.length > 0) {
-      const selectedInOverflow = overflowTags.some((t) => t.tag === state.tag);
+      const selectedInOverflow = overflowTags.some((t) => state.tags.includes(String(t.tag).toLowerCase()));
       html += `<select id="moreTagsSelect" class="more-tags-select ${selectedInOverflow ? "active" : ""}">`;
       html += `<option value="">Ещё (${overflowTags.length})...</option>`;
       overflowTags.forEach((t) => {
-        const sel = state.tag === t.tag ? "selected" : "";
+        const sel = state.tags.includes(String(t.tag).toLowerCase()) ? "selected" : "";
         html += `<option value="${escapeHtml(t.tag)}" ${sel}>${escapeHtml(t.tag)} (${t.count})</option>`;
       });
       html += `</select>`;
@@ -2345,8 +2705,13 @@
       })
       .join("");
 
+    const triageBtnHtml =
+      counts.inbox > 0
+        ? `<button type="button" class="status-pill-chip triage-chip" id="triageBtnBar" title="Быстрый разбор входящих (клавиша T)"><span>⚡ Разобрать (${counts.inbox})</span></button>`
+        : "";
+
     const luckyBtnHtml = `<button type="button" class="status-pill-chip lucky-chip" id="luckyBtnBar" title="Выбрать случайную запись из текущего списка">${UI_ICONS.dice}<span>Мне повезёт</span></button>`;
-    bar.innerHTML = pillsHtml + luckyBtnHtml;
+    bar.innerHTML = pillsHtml + triageBtnHtml + luckyBtnHtml;
   }
 
   function renderSkeletonRows(count = 6) {
@@ -2371,17 +2736,37 @@
       .join("");
   }
 
-  function pickRandomItem() {
+  function pickRandomItem({ fromDrawer = false } = {}) {
     if (!state.items.length) return;
-    const pool =
-      state.status === "all"
+    if (!fromDrawer) {
+      state.luckySeenIds = new Set();
+    }
+    const basePool =
+      state.status === "all" && !state.smart
         ? state.items.filter((i) => i.status === "planned" || i.status === "inbox")
         : state.items;
-    const candidates = pool.length ? pool : state.items;
+    const pool = basePool.length ? basePool : state.items;
+
+    let candidates = pool.filter(
+      (i) =>
+        !state.luckySeenIds.has(Number(i.id)) &&
+        !(fromDrawer && pool.length > 1 && Number(i.id) === Number(state.drawerItemId))
+    );
+    if (!candidates.length) {
+      state.luckySeenIds = new Set();
+      candidates =
+        fromDrawer && pool.length > 1
+          ? pool.filter((i) => Number(i.id) !== Number(state.drawerItemId))
+          : pool;
+    }
+    if (!candidates.length) candidates = pool;
+
     const chosen = candidates[Math.floor(Math.random() * candidates.length)];
     if (chosen) {
+      state.luckySeenIds.add(Number(chosen.id));
+      state.luckyMode = true;
       haptic("medium");
-      openDetailDrawer(chosen.id);
+      openDetailDrawer(chosen.id, { keepLucky: true, replaceUrl: fromDrawer });
     }
   }
 
@@ -2396,7 +2781,7 @@
     const hasFilters = Boolean(
       state.tab ||
         state.q ||
-        (state.view === "catalog" && (state.status !== "all" || state.tag))
+        (state.view === "catalog" && (state.status !== "all" || state.tags.length > 0 || Boolean(state.smart)))
     );
 
     if (emojiEl) {
@@ -2429,11 +2814,13 @@
   function renderCatalog(opts = {}) {
     const { skipDrawer = false } = opts;
     openSwipeWrap = null;
+    state.focusedIndex = -1;
     const container = document.getElementById("catalogContainer");
     const grid = document.getElementById("catalogGrid");
     const empty = document.getElementById("emptyState");
 
     updateCountLabels(`Найдено записей: ${state.items.length}`, state.items.length);
+    renderActiveSmartBanner();
     renderStatusPillsBar();
 
     if (!state.items.length) {
@@ -2477,6 +2864,7 @@
     const grid = document.getElementById("catalogGrid");
     const empty = document.getElementById("emptyState");
     if (container) container.classList.remove("kanban-wide");
+    renderActiveSmartBanner();
     renderStatusPillsBar();
 
     updateCountLabels(`Оригиналов: ${state.originals.length}`, state.originals.length);
@@ -2573,6 +2961,10 @@
       btn.classList.toggle("active", (btn.dataset.tab || "") === state.tab);
     });
 
+    document.querySelectorAll("#sidebarSmartViews .nav-btn[data-smart]").forEach((btn) => {
+      btn.classList.toggle("active", !isOriginals && btn.dataset.smart === state.smart);
+    });
+
     document.querySelectorAll("#viewModeSwitchDesktop .mode-btn").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.mode === state.viewMode);
     });
@@ -2606,7 +2998,12 @@
       : "Поиск по названию, автору, описанию...";
 
     const hasActiveFilter =
-      !isOriginals && (state.status !== "all" || state.sort !== "created" || Boolean(state.tag) || Boolean(state.tab));
+      !isOriginals &&
+      (state.status !== "all" ||
+        state.sort !== "created" ||
+        state.tags.length > 0 ||
+        Boolean(state.tab) ||
+        Boolean(state.smart));
     const filterDot = document.getElementById("mobileFilterDot");
     if (filterDot) filterDot.classList.toggle("hidden", !hasActiveFilter);
   }
@@ -2646,7 +3043,8 @@
       state.view === "catalog" &&
       state.tab === "" &&
       state.status === "all" &&
-      state.tag === "" &&
+      state.tags.length === 0 &&
+      state.smart === "" &&
       state.q === "" &&
       state.sort === "created"
     );
@@ -2732,8 +3130,9 @@
 
     const params = new URLSearchParams();
     if (state.tab) params.set("tab", state.tab);
+    if (state.smart) params.set("smart", state.smart);
     if (state.status && state.status !== "all") params.set("status", state.status);
-    if (state.tag) params.set("tag", state.tag);
+    if (state.tags.length) params.set("tag", state.tags.join(","));
     if (state.q) params.set("q", state.q);
     if (state.sort) params.set("sort", state.sort);
 
@@ -2752,7 +3151,7 @@
       if (signal.aborted) return;
       state.items = data.items || [];
       state.tgChatId = data.tg_chat_id || 0;
-      if (state.status === "all" && !state.tag && !state.q) {
+      if (state.status === "all" && !state.tags.length && !state.q && !state.smart) {
         state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
       }
       if (isDefaultCatalogQuery()) {
@@ -2785,45 +3184,77 @@
     }
   }
 
+  function applyPayloadToItem(target, payload) {
+    if (payload.status !== undefined) target.status = payload.status;
+    if (payload.user_rating !== undefined) {
+      target.user_rating = payload.user_rating === 0 ? null : Number(payload.user_rating);
+    }
+    if (payload.title_ru !== undefined && payload.title_ru.trim()) {
+      target.title_ru = payload.title_ru.trim();
+    }
+    if (payload.summary !== undefined) {
+      target.summary = payload.summary.trim() || null;
+    }
+    if (payload.tags !== undefined) {
+      target.tags = [...payload.tags];
+    }
+    if (payload.user_note !== undefined) {
+      const metaObj = parseMeta(target.meta);
+      if (payload.user_note.trim()) {
+        metaObj.user_note = payload.user_note.trim();
+      } else {
+        delete metaObj.user_note;
+      }
+      target.meta = metaObj;
+    }
+  }
+
   async function patchItem(itemId, payload, opts = {}) {
     const numId = Number(itemId);
     const idx = state.items.findIndex((i) => Number(i.id) === numId);
-    const prevSnapshot = idx !== -1 ? JSON.parse(JSON.stringify(state.items[idx])) : null;
+    const isExternal = idx === -1 && Boolean(state.externalDrawerItem && Number(state.externalDrawerItem.id) === numId);
+    const prevSnapshot =
+      idx !== -1
+        ? JSON.parse(JSON.stringify(state.items[idx]))
+        : isExternal
+        ? JSON.parse(JSON.stringify(state.externalDrawerItem))
+        : null;
     const syncTags = payload.tags !== undefined;
     const syncSummary = Boolean(opts.syncSummary);
     const skipNoteInput = Boolean(opts.fromNoteAutosave);
+    const canUpdateTabCounts = state.status === "all" && !state.tags.length && !state.q && !state.smart;
+
+    function rollbackPatch() {
+      if (!prevSnapshot) return;
+      if (idx !== -1) {
+        state.items[idx] = prevSnapshot;
+        if (canUpdateTabCounts) {
+          state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
+        }
+        renderCatalog({ skipDrawer: true });
+      } else if (isExternal) {
+        state.externalDrawerItem = prevSnapshot;
+      }
+      if (Number(state.drawerItemId) === numId) {
+        syncDetailDrawerInPlace(prevSnapshot, { skipNoteInput, syncTags, syncSummary });
+      }
+    }
 
     // Оптимистично обновляем UI мгновенно
     if (idx !== -1) {
       const target = state.items[idx];
-      if (payload.status !== undefined) target.status = payload.status;
-      if (payload.user_rating !== undefined) {
-        target.user_rating = payload.user_rating === 0 ? null : Number(payload.user_rating);
-      }
-      if (payload.title_ru !== undefined && payload.title_ru.trim()) {
-        target.title_ru = payload.title_ru.trim();
-      }
-      if (payload.summary !== undefined) {
-        target.summary = payload.summary.trim() || null;
-      }
-      if (payload.tags !== undefined) {
-        target.tags = [...payload.tags];
-      }
-      if (payload.user_note !== undefined) {
-        const metaObj = parseMeta(target.meta);
-        if (payload.user_note.trim()) {
-          metaObj.user_note = payload.user_note.trim();
-        } else {
-          delete metaObj.user_note;
-        }
-        target.meta = metaObj;
-      }
-      if (state.status === "all" && !state.tag && !state.q) {
+      applyPayloadToItem(target, payload);
+      if (canUpdateTabCounts) {
         state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
       }
       renderCatalog({ skipDrawer: true });
       if (Number(state.drawerItemId) === numId) {
         syncDetailDrawerInPlace(target, { skipNoteInput, syncTags, syncSummary });
+      }
+    } else if (isExternal) {
+      applyPayloadToItem(state.externalDrawerItem, payload);
+      if (Number(state.drawerItemId) === numId) {
+        syncDetailDrawerInPlace(state.externalDrawerItem, { skipNoteInput, syncTags, syncSummary });
       }
     }
 
@@ -2836,53 +3267,39 @@
         keepalive: Boolean(opts.keepalive),
       });
     } catch {
-      if (prevSnapshot && idx !== -1) {
-        state.items[idx] = prevSnapshot;
-        renderCatalog({ skipDrawer: true });
-        if (Number(state.drawerItemId) === numId) {
-          syncDetailDrawerInPlace(prevSnapshot, { skipNoteInput, syncTags, syncSummary });
-        }
-      }
+      rollbackPatch();
       return false;
     }
 
     if (res.status === 401 || res.status === 403) {
-      if (prevSnapshot && idx !== -1) {
-        state.items[idx] = prevSnapshot;
-        renderCatalog({ skipDrawer: true });
-        if (Number(state.drawerItemId) === numId) {
-          syncDetailDrawerInPlace(prevSnapshot, { skipNoteInput, syncTags, syncSummary });
-        }
-      }
+      rollbackPatch();
       showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
       return false;
     }
     if (res.ok) {
       const updated = await res.json();
+      if (state.externalDrawerItem && Number(state.externalDrawerItem.id) === numId) {
+        state.externalDrawerItem = updated;
+      }
       const freshIdx = state.items.findIndex((i) => Number(i.id) === numId);
       if (freshIdx !== -1) {
         state.items[freshIdx] = updated;
-        if (state.status === "all" && !state.tag && !state.q) {
+        if (canUpdateTabCounts) {
           state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
         }
         if (isDefaultCatalogQuery()) saveItemsCache();
         renderCatalog({ skipDrawer: true });
-        if (Number(state.drawerItemId) === numId) {
-          syncDetailDrawerInPlace(updated, { skipNoteInput, syncTags, syncSummary });
-        }
+      }
+      if (Number(state.drawerItemId) === numId) {
+        syncDetailDrawerInPlace(updated, { skipNoteInput, syncTags, syncSummary });
       }
       if (payload.tags !== undefined) {
         loadTags();
       }
       haptic("light");
       return true;
-    } else if (prevSnapshot && idx !== -1) {
-      state.items[idx] = prevSnapshot;
-      renderCatalog({ skipDrawer: true });
-      if (Number(state.drawerItemId) === numId) {
-        syncDetailDrawerInPlace(prevSnapshot, { skipNoteInput, syncTags, syncSummary });
-      }
     }
+    rollbackPatch();
     return false;
   }
 
@@ -2963,10 +3380,12 @@
         const insertAt = Math.min(entry.index, state.originals.length);
         state.originals.splice(insertAt, 0, entry.snapshot);
         renderOriginals();
+      } else if (entry.external) {
+        state.externalDrawerItem = entry.snapshot;
       } else {
         const insertAt = Math.min(entry.index, state.items.length);
         state.items.splice(insertAt, 0, entry.snapshot);
-        if (state.status === "all" && !state.tag && !state.q) {
+        if (state.status === "all" && !state.tags.length && !state.q && !state.smart) {
           state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
         }
         renderCatalog();
@@ -2983,22 +3402,28 @@
   async function deleteItem(itemId) {
     const numId = Number(itemId);
     const idx = state.items.findIndex((i) => Number(i.id) === numId);
-    if (idx === -1) return;
+    const isExternal = idx === -1 && Boolean(state.externalDrawerItem && Number(state.externalDrawerItem.id) === numId);
+    if (idx === -1 && !isExternal) return;
     flushPendingDelete();
 
-    const snapshot = state.items[idx];
-    state.items.splice(idx, 1);
-    if (state.status === "all" && !state.tag && !state.q) {
-      state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
+    const snapshot = isExternal ? state.externalDrawerItem : state.items[idx];
+    if (isExternal) {
+      state.externalDrawerItem = null;
+    } else {
+      state.items.splice(idx, 1);
+      if (state.status === "all" && !state.tags.length && !state.q && !state.smart) {
+        state.statusCountsByTab[state.tab || ""] = computeStatusCounts(state.items);
+      }
+      renderCatalog();
     }
-    renderCatalog();
     haptic("medium");
 
     const shortTitle = (snapshot.title_ru || "Запись").slice(0, 28);
     showUndoToast(`«${shortTitle}» удалена`, {
       type: "item",
       id: numId,
-      index: idx,
+      index: isExternal ? 0 : idx,
+      external: isExternal,
       snapshot,
       timer: null,
     });
@@ -3046,13 +3471,40 @@
     const btn = e.target.closest("[data-view]");
     if (!btn) return;
     state.view = btn.dataset.view || "catalog";
+    syncStateToUrl({ push: true });
     refreshCurrentView();
   });
+
+  const sidebarSmartViewsEl = document.getElementById("sidebarSmartViews");
+  if (sidebarSmartViewsEl) {
+    sidebarSmartViewsEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-smart]");
+      if (!btn) return;
+      toggleSmartView(btn.dataset.smart || "");
+      haptic("selection");
+    });
+  }
+
+  const activeSmartBannerEl = document.getElementById("activeSmartBanner");
+  if (activeSmartBannerEl) {
+    activeSmartBannerEl.addEventListener("click", (e) => {
+      if (e.target.closest("#clearSmartViewBtn")) {
+        toggleSmartView("");
+        haptic("selection");
+      }
+    });
+  }
+
+  const shortcutsHelpBtnDesktop = document.getElementById("shortcutsHelpBtnDesktop");
+  if (shortcutsHelpBtnDesktop) {
+    shortcutsHelpBtnDesktop.addEventListener("click", () => openShortcutsModal());
+  }
 
   document.getElementById("mobileBottomBar").addEventListener("click", (e) => {
     const viewBtn = e.target.closest("[data-view]");
     if (viewBtn) {
       state.view = viewBtn.dataset.view || "catalog";
+      syncStateToUrl({ push: true });
       refreshCurrentView();
       window.scrollTo({ top: 0, behavior: "smooth" });
       haptic("selection");
@@ -3075,8 +3527,9 @@
       const btn = e.target.closest("[data-tab]");
       if (!btn) return;
       state.tab = btn.dataset.tab || "";
-      state.tag = "";
+      state.tags = [];
       state.viewMode = getViewModeForTab(state.tab);
+      syncStateToUrl({ push: true });
       refreshCurrentView();
       haptic("selection");
     });
@@ -3095,6 +3548,7 @@
     const mobSort = document.getElementById("mobileSortSelect");
     if (mobSort) mobSort.value = state.sort;
     syncNavigationState();
+    syncStateToUrl({ push: true });
     loadItems();
   });
 
@@ -3104,6 +3558,7 @@
       state.sort = e.target.value;
       document.getElementById("sortSelect").value = state.sort;
       syncNavigationState();
+      syncStateToUrl({ push: true });
       loadItems();
     });
   }
@@ -3111,19 +3566,16 @@
   document.getElementById("tagBar").addEventListener("click", (e) => {
     const btn = e.target.closest(".chip");
     if (!btn) return;
-    const clickedTag = btn.dataset.tag || "";
-    state.tag = state.tag === clickedTag && clickedTag !== "" ? "" : clickedTag;
-    syncNavigationState();
-    renderTagBar();
-    loadItems();
+    toggleTagFilter(btn.dataset.tag || "");
+    haptic("selection");
   });
 
   document.getElementById("tagBar").addEventListener("change", (e) => {
     if (e.target.id === "moreTagsSelect") {
-      state.tag = e.target.value || "";
-      syncNavigationState();
-      renderTagBar();
-      loadItems();
+      if (e.target.value) {
+        toggleTagFilter(e.target.value);
+        e.target.value = "";
+      }
     }
   });
 
@@ -3143,6 +3595,7 @@
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
       state.q = val.trim();
+      syncStateToUrl({ push: false });
       if (state.view === "originals") {
         loadOriginals();
       } else {
@@ -3155,6 +3608,7 @@
     searchInput.value = "";
     syncSearchQueryState("");
     state.q = "";
+    syncStateToUrl({ push: false });
     if (state.view === "originals") {
       loadOriginals();
     } else {
@@ -3170,6 +3624,10 @@
   const statusPillsBarEl = document.getElementById("statusPillsBar");
   if (statusPillsBarEl) {
     statusPillsBarEl.addEventListener("click", (e) => {
+      if (e.target.closest("#triageBtnBar")) {
+        startInboxTriage();
+        return;
+      }
       if (e.target.closest("#luckyBtnBar")) {
         pickRandomItem();
         return;
@@ -3177,7 +3635,11 @@
       const stPill = e.target.closest("[data-status-pill]");
       if (stPill) {
         state.status = stPill.dataset.statusPill || "all";
+        if (state.smart === "top_planned" || state.smart === "unrated_done") {
+          state.smart = "";
+        }
         syncNavigationState();
+        syncStateToUrl({ push: true });
         withViewTransition(() => loadItems());
         haptic("selection");
       }
@@ -3378,65 +3840,208 @@
   const cmdTrigger = document.getElementById("cmdPaletteTrigger");
   let cmdActiveIndex = 0;
   let cmdEntries = [];
+  let cmdRemoteItems = [];
+  let cmdRemoteQuery = "";
+  let cmdRemoteLoading = false;
+  let cmdSearchTimer = null;
+  let cmdSearchAbort = null;
+
+  async function fetchGlobalCmdItems(rawQuery) {
+    const q = (rawQuery || "").trim();
+    if (q.length < 2) {
+      if (cmdSearchAbort) cmdSearchAbort.abort();
+      cmdSearchAbort = null;
+      cmdRemoteItems = [];
+      cmdRemoteQuery = "";
+      cmdRemoteLoading = false;
+      renderCmdList();
+      return;
+    }
+
+    if (cmdSearchAbort) cmdSearchAbort.abort();
+    cmdSearchAbort = new AbortController();
+    const { signal } = cmdSearchAbort;
+
+    cmdRemoteLoading = true;
+    cmdRemoteQuery = q;
+    renderCmdList();
+
+    try {
+      const res = await fetch(`/api/items?q=${encodeURIComponent(q)}&limit=12`, {
+        headers: authHeaders(),
+        signal,
+      });
+      if (signal.aborted) return;
+      if (res.ok) {
+        const data = await res.json();
+        if (signal.aborted) return;
+        cmdRemoteItems = data.items || [];
+      } else {
+        cmdRemoteItems = [];
+      }
+    } catch (err) {
+      if (err && err.name === "AbortError") return;
+      cmdRemoteItems = [];
+    } finally {
+      if (!signal.aborted) {
+        cmdRemoteLoading = false;
+        renderCmdList();
+      }
+    }
+  }
 
   function buildCmdEntries(query) {
-    const q = (query || "").trim().toLowerCase();
+    const rawTrimmed = (query || "").trim();
+    const q = rawTrimmed.toLowerCase();
+    const cleanQ = q.replace(/^#+/, "");
     const actions = [
       { id: "act-add", group: "Действия", label: "➕ Добавить запись", sub: "Клавиша N", run: () => openQuickAddModal() },
-      { id: "act-lucky", group: "Действия", label: "🎲 Мне повезёт", sub: "Случайный выбор", run: () => pickRandomItem() },
+      { id: "act-triage", group: "Действия", label: "⚡ Разобрать входящие", sub: "Клавиша T", run: () => startInboxTriage() },
+      { id: "act-lucky", group: "Действия", label: "🎲 Мне повезёт", sub: "Клавиша L", run: () => pickRandomItem() },
+      { id: "act-shortcuts", group: "Действия", label: "⌨️ Горячие клавиши", sub: "Клавиша ?", run: () => openShortcutsModal() },
       { id: "act-list", group: "Вид", label: "☰ Вид: Список", sub: "", run: () => setViewMode("list") },
       { id: "act-posters", group: "Вид", label: "🖼 Вид: Постеры", sub: "", run: () => setViewMode("posters") },
       { id: "act-cards", group: "Вид", label: "⊞ Вид: Карточки", sub: "", run: () => setViewMode("cards") },
       { id: "act-kanban", group: "Вид", label: "▥ Вид: Канбан", sub: "", run: () => setViewMode("kanban") },
       { id: "act-theme", group: "Настройки", label: "🌗 Сменить тему (Бумага / Чернила)", sub: "", run: () => cycleThemeMode() },
-      { id: "act-cat-all", group: "Категории", label: "📚 Все записи", sub: "", run: () => { state.view = "catalog"; state.tab = ""; state.viewMode = getViewModeForTab(""); refreshCurrentView(); } },
-      { id: "act-cat-movies", group: "Категории", label: "🎬 Кино и сериалы", sub: "", run: () => { state.view = "catalog"; state.tab = "movies"; state.viewMode = getViewModeForTab("movies"); refreshCurrentView(); } },
-      { id: "act-cat-books", group: "Категории", label: "📚 Книги", sub: "", run: () => { state.view = "catalog"; state.tab = "books"; state.viewMode = getViewModeForTab("books"); refreshCurrentView(); } },
-      { id: "act-cat-orig", group: "Разделы", label: "📥 Открыть Оригиналы", sub: "", run: () => { state.view = "originals"; refreshCurrentView(); } },
+      {
+        id: "act-cat-all",
+        group: "Категории",
+        label: "📚 Все записи",
+        sub: "",
+        run: () => {
+          state.view = "catalog";
+          state.tab = "";
+          state.smart = "";
+          state.tags = [];
+          state.viewMode = getViewModeForTab("");
+          syncStateToUrl({ push: true });
+          refreshCurrentView();
+        },
+      },
+      {
+        id: "act-cat-movies",
+        group: "Категории",
+        label: "🎬 Кино и сериалы",
+        sub: "",
+        run: () => {
+          state.view = "catalog";
+          state.tab = "movies";
+          state.viewMode = getViewModeForTab("movies");
+          syncStateToUrl({ push: true });
+          refreshCurrentView();
+        },
+      },
+      {
+        id: "act-cat-books",
+        group: "Категории",
+        label: "📚 Книги",
+        sub: "",
+        run: () => {
+          state.view = "catalog";
+          state.tab = "books";
+          state.viewMode = getViewModeForTab("books");
+          syncStateToUrl({ push: true });
+          refreshCurrentView();
+        },
+      },
+      {
+        id: "act-cat-orig",
+        group: "Разделы",
+        label: "📥 Открыть Оригиналы",
+        sub: "",
+        run: () => {
+          state.view = "originals";
+          syncStateToUrl({ push: true });
+          refreshCurrentView();
+        },
+      },
     ];
+    const smartActions = Object.entries(SMART_VIEWS_META).map(([key, meta]) => ({
+      id: `smart-${key}`,
+      group: "Умные списки",
+      label: meta.label,
+      sub: "",
+      run: () => toggleSmartView(key),
+    }));
+
     const filteredActions = q
-      ? actions.filter((a) => a.label.toLowerCase().includes(q))
-      : actions.slice(0, 6);
+      ? [...actions, ...smartActions].filter((a) => a.label.toLowerCase().includes(q))
+      : [...actions.slice(0, 6), ...smartActions.slice(0, 3)];
 
-    const matchedItems = state.items
-      .filter((it) => {
-        if (!q) return false;
-        const hay = `${it.title_ru || ""} ${it.title_orig || ""} ${it.creator || ""}`.toLowerCase();
-        return hay.includes(q);
-      })
-      .slice(0, 8)
-      .map((it) => ({
-        id: `item-${it.id}`,
-        group: "Записи",
-        label: `${CATEGORY_EMOJI[it.category] || "📌"} ${it.title_ru || "Без названия"}`,
-        sub: (STATUS_META[it.status] || STATUS_META.inbox).label,
-        run: () => openDetailDrawer(it.id),
-      }));
+    const localIds = new Set(state.items.map((i) => Number(i.id)));
+    const matchedLocal = q
+      ? state.items.filter((it) => {
+          const noteText = parseMeta(it.meta).user_note || "";
+          const tagsText = (it.tags || []).join(" ");
+          const hay = `${it.title_ru || ""} ${it.title_orig || ""} ${it.creator || ""} ${it.summary || ""} ${tagsText} ${noteText}`.toLowerCase();
+          return hay.includes(q) || (cleanQ && hay.includes(cleanQ));
+        })
+      : [];
 
-    return [...matchedItems, ...filteredActions];
+    const combinedItems = [];
+    const seenIds = new Set();
+    for (const it of matchedLocal) {
+      const idNum = Number(it.id);
+      if (seenIds.has(idNum)) continue;
+      seenIds.add(idNum);
+      combinedItems.push(it);
+      if (combinedItems.length >= 12) break;
+    }
+
+    if (q.length >= 2 && cmdRemoteQuery.trim().toLowerCase() === q) {
+      for (const it of cmdRemoteItems) {
+        const idNum = Number(it.id);
+        if (seenIds.has(idNum)) continue;
+        seenIds.add(idNum);
+        combinedItems.push(it);
+        if (combinedItems.length >= 12) break;
+      }
+    }
+
+    const itemEntries = combinedItems.map((it) => ({
+      id: `item-${it.id}`,
+      group: localIds.has(Number(it.id)) ? "Записи" : "Вся база",
+      label: `${CATEGORY_EMOJI[it.category] || "📌"} ${it.title_ru || "Без названия"}`,
+      sub: (STATUS_META[it.status] || STATUS_META.inbox).label,
+      run: () => openDetailDrawer(it.id, { fallbackItem: it }),
+    }));
+
+    return [...itemEntries, ...filteredActions];
   }
 
   function renderCmdList() {
     if (!cmdList) return;
-    cmdEntries = buildCmdEntries(cmdInput ? cmdInput.value : "");
+    const rawVal = cmdInput ? cmdInput.value.trim() : "";
+    cmdEntries = buildCmdEntries(rawVal);
     if (cmdActiveIndex >= cmdEntries.length) cmdActiveIndex = Math.max(0, cmdEntries.length - 1);
-    if (!cmdEntries.length) {
+    const showLoadingHint = cmdRemoteLoading && rawVal.length >= 2;
+    if (!cmdEntries.length && !showLoadingHint) {
       cmdList.innerHTML = `<div class="cmd-group-label">Ничего не найдено</div>`;
       return;
     }
     let lastGroup = "";
-    cmdList.innerHTML = cmdEntries
+    const entriesHtml = cmdEntries
       .map((entry, idx) => {
         const hdr = entry.group !== lastGroup ? `<div class="cmd-group-label">${escapeHtml(entry.group)}</div>` : "";
         lastGroup = entry.group;
         return `${hdr}<button type="button" class="cmd-item ${idx === cmdActiveIndex ? "active" : ""}" data-cmd-idx="${idx}"><span>${escapeHtml(entry.label)}</span><span class="cmd-item-sub">${escapeHtml(entry.sub)}</span></button>`;
       })
       .join("");
+    const loadingHtml = showLoadingHint ? `<div class="cmd-loading-hint">Поиск по всей базе…</div>` : "";
+    cmdList.innerHTML = entriesHtml + loadingHtml;
   }
 
   function openCmdPalette() {
     closeStatusPopover();
     closeRatingPopover();
+    closeShortcutsModal();
+    clearTimeout(cmdSearchTimer);
+    if (cmdSearchAbort) cmdSearchAbort.abort();
+    cmdSearchAbort = null;
+    cmdRemoteItems = [];
+    cmdRemoteQuery = "";
+    cmdRemoteLoading = false;
     state.cmdPaletteOpen = true;
     cmdActiveIndex = 0;
     if (cmdInput) cmdInput.value = "";
@@ -3450,6 +4055,10 @@
   }
 
   function closeCmdPalette() {
+    clearTimeout(cmdSearchTimer);
+    if (cmdSearchAbort) cmdSearchAbort.abort();
+    cmdSearchAbort = null;
+    cmdRemoteLoading = false;
     if (!state.cmdPaletteOpen) return;
     state.cmdPaletteOpen = false;
     if (cmdOverlay) {
@@ -3468,7 +4077,10 @@
   if (cmdInput) {
     cmdInput.addEventListener("input", () => {
       cmdActiveIndex = 0;
+      const val = cmdInput.value;
       renderCmdList();
+      clearTimeout(cmdSearchTimer);
+      cmdSearchTimer = setTimeout(() => fetchGlobalCmdItems(val), 180);
     });
     cmdInput.addEventListener("keydown", (e) => {
       if (e.key === "ArrowDown") {
@@ -3862,10 +4474,8 @@
       e.stopPropagation();
       closeStatusPopover();
       closeRatingPopover();
-      state.tag = pill.dataset.tag || "";
-      syncNavigationState();
-      renderTagBar();
-      loadItems();
+      toggleTagFilter(pill.dataset.tag || "");
+      haptic("selection");
       return;
     }
 
@@ -3884,9 +4494,10 @@
     emptyStateActionsEl.addEventListener("click", (e) => {
       if (e.target.closest("#emptyResetFiltersBtn")) {
         state.tab = "";
+        state.smart = "";
         state.status = "all";
         state.sort = "created";
-        state.tag = "";
+        state.tags = [];
         state.q = "";
         if (searchInput) {
           searchInput.value = "";
@@ -3897,6 +4508,7 @@
         const mobSort = document.getElementById("mobileSortSelect");
         if (mobSort) mobSort.value = "created";
         state.viewMode = getViewModeForTab("");
+        syncStateToUrl({ push: true });
         refreshCurrentView();
         haptic("selection");
         return;
@@ -3919,7 +4531,71 @@
     }
   });
 
-  document.addEventListener("keydown", (e) => {
+  function openShortcutsModal() {
+    closeStatusPopover();
+    closeRatingPopover();
+    closeCmdPalette();
+    closeQuickAddModal();
+    closeFiltersSheet();
+    state.shortcutsOpen = true;
+    if (shortcutsOverlay) {
+      shortcutsOverlay.classList.remove("hidden");
+      shortcutsOverlay.setAttribute("aria-hidden", "false");
+    }
+    syncTelegramBackButton();
+  }
+
+  function closeShortcutsModal() {
+    if (!state.shortcutsOpen) return;
+    state.shortcutsOpen = false;
+    if (shortcutsOverlay) {
+      shortcutsOverlay.classList.add("hidden");
+      shortcutsOverlay.setAttribute("aria-hidden", "true");
+    }
+    syncTelegramBackButton();
+  }
+
+  const shortcutsCloseBtn = document.getElementById("shortcutsCloseBtn");
+  if (shortcutsCloseBtn) {
+    shortcutsCloseBtn.addEventListener("click", closeShortcutsModal);
+  }
+  if (shortcutsOverlay) {
+    shortcutsOverlay.addEventListener("click", (e) => {
+      if (e.target === shortcutsOverlay) closeShortcutsModal();
+    });
+  }
+
+  function clearListFocus() {
+    state.focusedIndex = -1;
+    if (catalogGridEl) {
+      catalogGridEl.querySelectorAll(".kb-focused").forEach((el) => el.classList.remove("kb-focused"));
+    }
+  }
+
+  function moveListFocus(delta) {
+    if (!catalogGridEl || state.view !== "catalog") return;
+    const nodes = Array.from(
+      catalogGridEl.querySelectorAll(
+        ".list-row[data-open-id], .item-card[data-open-id], .poster-card[data-open-id], .kanban-card[data-open-id]"
+      )
+    );
+    if (!nodes.length) return;
+    nodes.forEach((n) => n.classList.remove("kb-focused"));
+    let nextIdx;
+    if (state.focusedIndex < 0 || state.focusedIndex >= nodes.length) {
+      nextIdx = delta >= 0 ? 0 : nodes.length - 1;
+    } else {
+      nextIdx = Math.max(0, Math.min(nodes.length - 1, state.focusedIndex + delta));
+    }
+    state.focusedIndex = nextIdx;
+    const targetNode = nodes[nextIdx];
+    targetNode.classList.add("kb-focused");
+    if (typeof targetNode.scrollIntoView === "function") {
+      targetNode.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }
+
+  document.addEventListener("keydown", async (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();
       if (state.cmdPaletteOpen) closeCmdPalette();
@@ -3932,17 +4608,36 @@
       closeRatingPopover();
       closeOpenSwipeRow();
       closePosterLightbox();
+      closeShortcutsModal();
       closeCmdPalette();
       closeQuickAddModal();
       closeDetailDrawer();
       closeFiltersSheet();
+      clearListFocus();
       return;
     }
 
-    const activeTag = (document.activeElement && document.activeElement.tagName || "").toLowerCase();
-    const isTyping = activeTag === "input" || activeTag === "textarea" || activeTag === "select";
+    const activeEl = document.activeElement;
+    const activeTag = (activeEl && activeEl.tagName ? activeEl.tagName : "").toLowerCase();
+    const isTyping =
+      activeTag === "input" ||
+      activeTag === "textarea" ||
+      activeTag === "select" ||
+      Boolean(activeEl && activeEl.isContentEditable);
 
-    if (state.drawerItemId !== null && !isTyping) {
+    if (isTyping || e.isComposing) return;
+
+    const noMod = !e.ctrlKey && !e.metaKey && !e.altKey;
+    const keyLower = (e.key || "").toLowerCase();
+
+    if (e.key === "?" && noMod) {
+      e.preventDefault();
+      if (state.shortcutsOpen) closeShortcutsModal();
+      else openShortcutsModal();
+      return;
+    }
+
+    if (state.drawerItemId !== null && noMod) {
       if (e.key === "ArrowLeft") {
         e.preventDefault();
         navigateDrawer(-1);
@@ -3953,15 +4648,93 @@
         navigateDrawer(1);
         return;
       }
+      const statusKeys = {
+        "1": "planned",
+        "2": "in_progress",
+        "3": "done",
+        "4": "dropped",
+        "0": "inbox",
+      };
+      if (statusKeys[e.key]) {
+        e.preventDefault();
+        const curId = state.drawerItemId;
+        const nextSt = statusKeys[e.key];
+        const wasTriage = state.triageMode;
+        await patchItem(curId, { status: nextSt });
+        if (wasTriage && nextSt !== "inbox") {
+          advanceInboxTriage({ processed: true, currentId: curId });
+        }
+        return;
+      }
+      if (keyLower === "e" || e.code === "KeyE") {
+        const editBtn = drawerBody ? drawerBody.querySelector("[data-drawer-edit-toggle]") : null;
+        if (editBtn) {
+          e.preventDefault();
+          editBtn.click();
+        }
+        return;
+      }
+      if (keyLower === "m" || e.code === "KeyM") {
+        const noteInp = document.getElementById("drawerNoteInput");
+        if (noteInp) {
+          e.preventDefault();
+          noteInp.focus();
+        }
+        return;
+      }
+      if ((keyLower === "s" || e.code === "KeyS") && state.triageMode) {
+        e.preventDefault();
+        advanceInboxTriage({ processed: false, currentId: state.drawerItemId });
+        return;
+      }
     }
 
-    if (!isTyping && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const noModalOpen =
+      !state.quickAddOpen &&
+      !state.cmdPaletteOpen &&
+      !state.shortcutsOpen &&
+      !state.filtersSheetOpen &&
+      state.drawerItemId === null;
+
+    if (noModalOpen && noMod) {
       if (e.key === "/") {
         e.preventDefault();
-        searchInput.focus();
-      } else if (e.key.toLowerCase() === "n" && !state.quickAddOpen && !state.cmdPaletteOpen) {
+        if (searchInput) searchInput.focus();
+        return;
+      }
+      if (keyLower === "n" || e.code === "KeyN") {
         e.preventDefault();
         openQuickAddModal();
+        return;
+      }
+      if (keyLower === "t" || e.code === "KeyT") {
+        e.preventDefault();
+        startInboxTriage();
+        return;
+      }
+      if (keyLower === "l" || e.code === "KeyL") {
+        e.preventDefault();
+        pickRandomItem();
+        return;
+      }
+      if (state.view === "catalog") {
+        if (keyLower === "j" || e.code === "KeyJ" || e.key === "ArrowDown") {
+          e.preventDefault();
+          moveListFocus(1);
+          return;
+        }
+        if (keyLower === "k" || e.code === "KeyK" || e.key === "ArrowUp") {
+          e.preventDefault();
+          moveListFocus(-1);
+          return;
+        }
+        if (e.key === "Enter" && state.focusedIndex >= 0 && catalogGridEl) {
+          const focused = catalogGridEl.querySelector(".kb-focused[data-open-id]");
+          if (focused) {
+            e.preventDefault();
+            openDetailDrawer(focused.dataset.openId);
+          }
+        }
       }
     }
   });
@@ -3998,6 +4771,7 @@
           state.filtersSheetOpen ||
           state.quickAddOpen ||
           state.cmdPaletteOpen ||
+          state.shortcutsOpen ||
           document.activeElement === searchInput;
 
         if (isAnyOverlayOpen || y < 48) {
@@ -4019,10 +4793,27 @@
     );
   })();
 
+  window.addEventListener("popstate", () => {
+    const urlItemId = restoreStateFromUrl();
+    syncSearchQueryState(state.q);
+    if (urlItemId === null && state.drawerItemId !== null) {
+      closeDetailDrawer({ skipUrlSync: true });
+    }
+    refreshCurrentView();
+    if (urlItemId !== null && Number(state.drawerItemId) !== urlItemId) {
+      openItemById(urlItemId, { skipUrlSync: true });
+    }
+  });
+
   enableCarouselTouchScroll(document.getElementById("mobileCategoryTabs"));
   enableCarouselTouchScroll(document.getElementById("tagBar"));
 
   hydrateIcons();
   applyTheme();
+  const initialItemId = restoreStateFromUrl();
+  syncSearchQueryState(state.q);
   refreshCurrentView();
+  if (initialItemId !== null) {
+    openItemById(initialItemId, { skipUrlSync: true });
+  }
 })();

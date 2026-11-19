@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,600..700;1,7..72,400&display=swap" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=27" />
+  <link rel="stylesheet" href="./styles.css?v=28" />
 </head>
 <body>
   <div class="app-shell">
@@ -74,12 +74,34 @@
         </nav>
       </div>
 
+      <div class="sidebar-section">
+        <div class="sidebar-label">Умные списки</div>
+        <nav class="sidebar-nav" id="sidebarSmartViews">
+          <button type="button" class="nav-btn" data-smart="top_planned">
+            <span>🔥 Топ к просмотру</span>
+          </button>
+          <button type="button" class="nav-btn" data-smart="favorites">
+            <span>⭐ Любимое (8+)</span>
+          </button>
+          <button type="button" class="nav-btn" data-smart="noted">
+            <span>✍️ С заметками</span>
+          </button>
+          <button type="button" class="nav-btn" data-smart="unrated_done">
+            <span>🎯 Готово без оценки</span>
+          </button>
+          <button type="button" class="nav-btn" data-smart="attention">
+            <span>⚠️ Требуют внимания</span>
+          </button>
+        </nav>
+      </div>
+
       <div class="sidebar-footer">
         <button type="button" class="sidebar-tool-btn" id="themeToggleDesktop" title="Переключить тему">
           <span class="nav-ico" id="themeIconDesktop"></span>
           <span id="themeLabelDesktop">Бумага</span>
         </button>
         <div class="sidebar-footer-actions">
+          <button type="button" class="icon-btn" id="shortcutsHelpBtnDesktop" title="Горячие клавиши (?)" aria-label="Горячие клавиши">?</button>
           <button type="button" class="icon-btn" id="refreshBtnDesktop" title="Обновить">
             <span class="nav-ico" data-icon="refresh"></span>
           </button>
@@ -185,6 +207,7 @@
       </header>
 
       <main class="catalog-container" id="catalogContainer">
+        <div id="activeSmartBanner" class="active-smart-banner hidden"></div>
         <div class="status-pills-bar" id="statusPillsBar" aria-label="Быстрый фильтр по статусам"></div>
         <div id="catalogGrid" class="catalog-list view-list"></div>
         <div id="emptyState" class="empty-state hidden">
@@ -225,6 +248,7 @@
       <div class="drawer-header" id="drawerHeaderBar">
         <span class="drawer-eyebrow" id="drawerCategoryLabel">Запись</span>
         <div class="drawer-header-actions">
+          <button type="button" class="liquid-pill drawer-lucky-btn hidden" id="drawerLuckyAgainBtn" title="Другой случайный вариант (L)">🎲 Ещё</button>
           <button type="button" class="icon-btn small-nav-btn" id="drawerPrevBtn" title="Предыдущая запись (←)" aria-label="Предыдущая запись">‹</button>
           <button type="button" class="icon-btn small-nav-btn" id="drawerNextBtn" title="Следующая запись (→)" aria-label="Следующая запись">›</button>
           <button type="button" class="icon-btn" id="drawerCloseBtn" title="Закрыть (Esc)">✕</button>
@@ -331,6 +355,39 @@
     </div>
   </div>
 
+  <!-- Модальное окно горячих клавиш (?) -->
+  <div id="shortcutsOverlay" class="cmd-overlay hidden" aria-hidden="true">
+    <div class="shortcuts-modal" id="shortcutsModal" role="dialog" aria-modal="true" aria-label="Горячие клавиши">
+      <div class="drawer-header">
+        <span class="drawer-eyebrow">⌨️ Горячие клавиши</span>
+        <button type="button" class="icon-btn" id="shortcutsCloseBtn" title="Закрыть (Esc)">✕</button>
+      </div>
+      <div class="shortcuts-body">
+        <div class="shortcut-group">
+          <div class="drawer-section-title">Каталог</div>
+          <div class="shortcut-row"><span>Поиск</span><kbd class="kbd-hint">/</kbd></div>
+          <div class="shortcut-row"><span>Глобальный Cmd+K</span><kbd class="kbd-hint">⌘K</kbd></div>
+          <div class="shortcut-row"><span>Добавить запись</span><kbd class="kbd-hint">N</kbd></div>
+          <div class="shortcut-row"><span>Разобрать входящие</span><kbd class="kbd-hint">T</kbd></div>
+          <div class="shortcut-row"><span>Мне повезёт</span><kbd class="kbd-hint">L</kbd></div>
+          <div class="shortcut-row"><span>Навигация вверх / вниз</span><kbd class="kbd-hint">J / K</kbd></div>
+          <div class="shortcut-row"><span>Открыть выбранную</span><kbd class="kbd-hint">Enter</kbd></div>
+          <div class="shortcut-row"><span>Эта справка</span><kbd class="kbd-hint">?</kbd></div>
+        </div>
+        <div class="shortcut-group">
+          <div class="drawer-section-title">Карточка (Detail Drawer)</div>
+          <div class="shortcut-row"><span>Листать записи</span><kbd class="kbd-hint">← / →</kbd></div>
+          <div class="shortcut-row"><span>Статус (Планы / Процесс / Готово / Брошено)</span><kbd class="kbd-hint">1–4</kbd></div>
+          <div class="shortcut-row"><span>Вернуть во Входящие</span><kbd class="kbd-hint">0</kbd></div>
+          <div class="shortcut-row"><span>Редактировать название/описание</span><kbd class="kbd-hint">E</kbd></div>
+          <div class="shortcut-row"><span>Перейти к заметке</span><kbd class="kbd-hint">M</kbd></div>
+          <div class="shortcut-row"><span>Пропустить в триаже</span><kbd class="kbd-hint">S</kbd></div>
+          <div class="shortcut-row"><span>Закрыть шторку</span><kbd class="kbd-hint">Esc</kbd></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Просмотр постера во весь экран (Lightbox) -->
   <div id="posterLightbox" class="lightbox-overlay hidden" aria-hidden="true">
     <button type="button" class="lightbox-close" id="lightboxCloseBtn" aria-label="Закрыть">✕</button>
@@ -343,6 +400,6 @@
     <button type="button" id="undoToastBtn" class="undo-toast-btn">Отменить</button>
   </div>
 
-  <script src="./app.js?v=27"></script>
+  <script src="./app.js?v=28"></script>
 </body>
 </html>
