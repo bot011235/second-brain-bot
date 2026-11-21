@@ -3486,6 +3486,8 @@ html[data-theme="dark"] .cat-post { --cat-accent-color: #facc15; }
   align-items: center;
   justify-content: center;
   padding: 20px;
+  touch-action: pinch-zoom;
+  transition: background-color 0.18s ease;
 }
 
 .lightbox-img {
@@ -3494,6 +3496,8 @@ html[data-theme="dark"] .cat-post { --cat-accent-color: #facc15; }
   border-radius: 12px;
   box-shadow: var(--shadow-lg);
   object-fit: contain;
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease;
+  will-change: transform;
 }
 
 .lightbox-close {
@@ -3514,20 +3518,27 @@ html[data-theme="dark"] .cat-post { --cat-accent-color: #facc15; }
   position: fixed;
   right: 24px;
   bottom: 24px;
-  z-index: 950;
+  z-index: 1050;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 11px 16px;
-  border-radius: 14px;
+  gap: 10px;
+  padding: 9px 13px;
+  border-radius: 13px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
-  max-width: 380px;
+  max-width: 360px;
+}
+
+#undoToastText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .undo-toast-btn {
@@ -4653,6 +4664,45 @@ html.is-tma.is-tma-fullscreen .zen-reader-topbar {
   gap: 10px;
 }
 
+.drawer-progress-card.is-collapsed {
+  padding-top: 11px;
+  padding-bottom: 11px;
+  gap: 0;
+}
+
+.progress-toggle-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+
+.progress-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.progress-chevron {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.progress-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .progress-header-row {
   display: flex;
   align-items: center;
@@ -5265,6 +5315,11 @@ html.is-tma.is-tma-fullscreen .zen-reader-topbar {
     right: 12px;
     bottom: calc(68px + env(safe-area-inset-bottom, 0px));
     max-width: none;
+  }
+
+  .undo-toast {
+    padding: 8px 12px;
+    font-size: 12.5px;
   }
 
   .zen-reader-topbar {

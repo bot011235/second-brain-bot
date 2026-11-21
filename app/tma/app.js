@@ -362,7 +362,7 @@
     tgChatId: 0,
     drawerItemId: null,
     externalDrawerItem: null,
-    drawerConfirmDelete: false,
+    drawerProgressExpanded: false,
     drawerEditMode: false,
     drawerAddTagMode: false,
     drawerAddHighlightMode: false,
@@ -1185,26 +1185,136 @@
   const shortcutsOverlay = document.getElementById("shortcutsOverlay");
   const posterLightbox = document.getElementById("posterLightbox");
   const lightboxImg = document.getElementById("lightboxImg");
+  const overlayHistoryStack = [];
+  let ignoreOverlayPopCount = 0;
+
+  function pushOverlayHistory(tag) {
+    if (overlayHistoryStack[overlayHistoryStack.length - 1] === tag) return;
+    try {
+      window.history.pushState({ ...(window.history.state || {}), sbOverlay: tag }, "", window.location.href);
+      overlayHistoryStack.push(tag);
+    } catch {}
+  }
+
+  function popOverlayHistory(tag, fromPopstate = false) {
+    const idx = overlayHistoryStack.lastIndexOf(tag);
+    if (idx === -1) return;
+    overlayHistoryStack.splice(idx, 1);
+    if (!fromPopstate) {
+      ignoreOverlayPopCount += 1;
+      try {
+        window.history.back();
+      } catch {
+        ignoreOverlayPopCount = Math.max(0, ignoreOverlayPopCount - 1);
+      }
+    }
+  }
 
   function openPosterLightbox(url, alt = "") {
     if (!posterLightbox || !lightboxImg || !url) return;
+    lightboxImg.style.transition = "";
+    lightboxImg.style.transform = "";
+    lightboxImg.style.opacity = "";
+    posterLightbox.style.backgroundColor = "";
     lightboxImg.src = url;
     lightboxImg.alt = alt;
     posterLightbox.classList.remove("hidden");
     posterLightbox.setAttribute("aria-hidden", "false");
+    pushOverlayHistory("lightbox");
     syncTelegramBackButton();
   }
 
-  function closePosterLightbox() {
+  function closePosterLightbox(opts = {}) {
     if (!posterLightbox || posterLightbox.classList.contains("hidden")) return;
+    const fromPopstate = Boolean(opts && opts.fromPopstate);
     posterLightbox.classList.add("hidden");
     posterLightbox.setAttribute("aria-hidden", "true");
-    if (lightboxImg) lightboxImg.src = "";
+    if (lightboxImg) {
+      lightboxImg.src = "";
+      lightboxImg.style.transition = "";
+      lightboxImg.style.transform = "";
+      lightboxImg.style.opacity = "";
+    }
+    posterLightbox.style.backgroundColor = "";
+    popOverlayHistory("lightbox", fromPopstate);
     syncTelegramBackButton();
   }
 
+  (function bindLightboxSwipe() {
+    if (!posterLightbox || !lightboxImg) return;
+    let startX = 0;
+    let startY = 0;
+    let dx = 0;
+    let dy = 0;
+    let dragging = false;
+
+    posterLightbox.addEventListener(
+      "touchstart",
+      (e) => {
+        if (posterLightbox.classList.contains("hidden")) return;
+        if (e.touches.length !== 1) {
+          dragging = false;
+          return;
+        }
+        if (e.target.closest("#lightboxCloseBtn")) return;
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        dx = 0;
+        dy = 0;
+        dragging = true;
+        lightboxImg.style.transition = "none";
+      },
+      { passive: true }
+    );
+
+    posterLightbox.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!dragging) return;
+        if (e.touches.length !== 1) {
+          dragging = false;
+          lightboxImg.style.transition = "";
+          lightboxImg.style.transform = "";
+          lightboxImg.style.opacity = "";
+          posterLightbox.style.backgroundColor = "";
+          return;
+        }
+        dx = e.touches[0].clientX - startX;
+        dy = e.touches[0].clientY - startY;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 6) return;
+        const scale = Math.max(0.84, 1 - dist / 950);
+        const opacity = Math.max(0.35, 1 - dist / 460);
+        const bgAlpha = Math.max(0.2, 0.88 - (dist / 420) * 0.65);
+        lightboxImg.style.transform = `translate3d(${Math.round(dx)}px, ${Math.round(dy)}px, 0) scale(${scale.toFixed(3)})`;
+        lightboxImg.style.opacity = opacity.toFixed(2);
+        posterLightbox.style.backgroundColor = `rgba(15, 13, 11, ${bgAlpha.toFixed(2)})`;
+      },
+      { passive: true }
+    );
+
+    const endDrag = () => {
+      if (!dragging) return;
+      dragging = false;
+      const dist = Math.hypot(dx, dy);
+      dx = 0;
+      dy = 0;
+      if (dist > 70) {
+        closePosterLightbox();
+        return;
+      }
+      lightboxImg.style.transition = "";
+      lightboxImg.style.transform = "";
+      lightboxImg.style.opacity = "";
+      posterLightbox.style.backgroundColor = "";
+    };
+
+    posterLightbox.addEventListener("touchend", endDrag, { passive: true });
+    posterLightbox.addEventListener("touchcancel", endDrag, { passive: true });
+  })();
+
   if (posterLightbox) {
-    document.getElementById("lightboxCloseBtn").addEventListener("click", closePosterLightbox);
+    document.getElementById("lightboxCloseBtn").addEventListener("click", () => closePosterLightbox());
     posterLightbox.addEventListener("click", (e) => {
       if (e.target === posterLightbox) closePosterLightbox();
     });
@@ -1516,6 +1626,8 @@
   function buildDrawerProgressHtml(item) {
     if (!item) return "";
     const meta = parseMeta(item.meta);
+    const isOpen = Boolean(state.drawerProgressExpanded);
+    const chev = isOpen ? "▴" : "▾";
     if (item.category === "series") {
       const p = meta.progress && meta.progress.kind === "series" ? meta.progress : {};
       const season = Math.max(1, Number(p.season || 1));
@@ -1527,20 +1639,30 @@
         pct > 0
           ? `<div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pct}%"></div></div>`
           : "";
+      const bodyHtml = isOpen
+        ? `
+          <div class="progress-card-body">
+            ${trackHtml}
+            <div class="progress-stepper-row">
+              <button type="button" class="progress-step-btn" data-prog-series-delta="-1" data-id="${item.id}" title="Предыдущая серия">−1</button>
+              <button type="button" class="progress-step-btn primary" data-prog-series-delta="1" data-id="${item.id}">+1 серия</button>
+              <button type="button" class="progress-step-btn" data-prog-season-delta="1" data-id="${item.id}">+1 сезон</button>
+              <label class="progress-num-group">С <input type="number" class="progress-num-input" data-prog-series-input="season" data-id="${item.id}" min="1" max="999" value="${season}" /></label>
+              <label class="progress-num-group">Э <input type="number" class="progress-num-input" data-prog-series-input="episode" data-id="${item.id}" min="0" max="9999" value="${episode}" /></label>
+            </div>
+          </div>
+        `
+        : "";
       return `
-        <div class="drawer-section drawer-progress-card">
-          <div class="progress-header-row">
-            <div class="drawer-section-title">📺 Прогресс просмотра</div>
-            <span class="progress-badge-lg">${escapeHtml(badgeText)}</span>
-          </div>
-          ${trackHtml}
-          <div class="progress-stepper-row">
-            <button type="button" class="progress-step-btn" data-prog-series-delta="-1" data-id="${item.id}" title="Предыдущая серия">−1</button>
-            <button type="button" class="progress-step-btn primary" data-prog-series-delta="1" data-id="${item.id}">+1 серия</button>
-            <button type="button" class="progress-step-btn" data-prog-season-delta="1" data-id="${item.id}">+1 сезон</button>
-            <label class="progress-num-group">С <input type="number" class="progress-num-input" data-prog-series-input="season" data-id="${item.id}" min="1" max="999" value="${season}" /></label>
-            <label class="progress-num-group">Э <input type="number" class="progress-num-input" data-prog-series-input="episode" data-id="${item.id}" min="0" max="9999" value="${episode}" /></label>
-          </div>
+        <div class="drawer-section drawer-progress-card${isOpen ? "" : " is-collapsed"}">
+          <button type="button" class="progress-toggle-head" data-drawer-progress-toggle aria-expanded="${isOpen ? "true" : "false"}">
+            <span class="drawer-section-title">📺 Прогресс просмотра</span>
+            <span class="progress-head-right">
+              <span class="progress-badge-lg">${escapeHtml(badgeText)}</span>
+              <span class="progress-chevron">${chev}</span>
+            </span>
+          </button>
+          ${bodyHtml}
         </div>
       `;
     }
@@ -1566,20 +1688,30 @@
         totalPages > 0 && page >= totalPages && item.status !== "done"
           ? `<button type="button" class="progress-done-hint" data-prog-book-done="${item.id}">✅ Отметить «Готово»</button>`
           : "";
+      const bodyHtml = isOpen
+        ? `
+          <div class="progress-card-body">
+            ${sliderHtml}
+            <div class="progress-stepper-row">
+              <label class="progress-num-group">Стр. <input type="number" class="progress-num-input" data-prog-book-input="page" data-id="${item.id}" min="0" max="99999" value="${page}" /></label>
+              <label class="progress-num-group">из <input type="number" class="progress-num-input" data-prog-book-input="total_pages" data-id="${item.id}" min="0" max="99999" value="${totalPages || ""}" placeholder="стр." /></label>
+              <button type="button" class="progress-step-btn primary" data-prog-book-delta="10" data-id="${item.id}">+10</button>
+              <button type="button" class="progress-step-btn" data-prog-book-delta="25" data-id="${item.id}">+25</button>
+            </div>
+            ${doneBtnHtml}
+          </div>
+        `
+        : "";
       return `
-        <div class="drawer-section drawer-progress-card">
-          <div class="progress-header-row">
-            <div class="drawer-section-title">📖 Прогресс чтения</div>
-            <span class="progress-badge-lg" id="drawerBookProgBadge">${escapeHtml(badgeText)}</span>
-          </div>
-          ${sliderHtml}
-          <div class="progress-stepper-row">
-            <label class="progress-num-group">Стр. <input type="number" class="progress-num-input" data-prog-book-input="page" data-id="${item.id}" min="0" max="99999" value="${page}" /></label>
-            <label class="progress-num-group">из <input type="number" class="progress-num-input" data-prog-book-input="total_pages" data-id="${item.id}" min="0" max="99999" value="${totalPages || ""}" placeholder="стр." /></label>
-            <button type="button" class="progress-step-btn primary" data-prog-book-delta="10" data-id="${item.id}">+10</button>
-            <button type="button" class="progress-step-btn" data-prog-book-delta="25" data-id="${item.id}">+25</button>
-          </div>
-          ${doneBtnHtml}
+        <div class="drawer-section drawer-progress-card${isOpen ? "" : " is-collapsed"}">
+          <button type="button" class="progress-toggle-head" data-drawer-progress-toggle aria-expanded="${isOpen ? "true" : "false"}">
+            <span class="drawer-section-title">📖 Прогресс чтения</span>
+            <span class="progress-head-right">
+              <span class="progress-badge-lg" id="drawerBookProgBadge">${escapeHtml(badgeText)}</span>
+              <span class="progress-chevron">${chev}</span>
+            </span>
+          </button>
+          ${bodyHtml}
         </div>
       `;
     }
@@ -1663,15 +1795,7 @@
   function buildDrawerActionsFooterHtml(item) {
     const isBusy = Number(state.reenrichingItemId) === Number(item.id);
     const reenrichHtml = `<button type="button" class="drawer-reenrich-btn${isBusy ? " is-loading" : ""}" data-drawer-reenrich="${item.id}"${isBusy ? " disabled" : ""} title="Повторно подтянуть постер, рейтинги, описание и текст"><span class="reenrich-ico">🔄</span><span>${isBusy ? "Обновляю..." : "Переобогатить"}</span></button>`;
-    const deleteFooterHtml = state.drawerConfirmDelete
-      ? `
-        <div class="drawer-confirm-box">
-          <span style="font-size:12.5px;color:var(--muted);">Удалить запись?</span>
-          <button type="button" class="confirm-yes-btn" data-drawer-delete-confirm="${item.id}">Удалить</button>
-          <button type="button" class="confirm-cancel-btn" data-drawer-delete-cancel>Отмена</button>
-        </div>
-      `
-      : `<button type="button" class="drawer-delete-btn" data-drawer-delete-ask>${UI_ICONS.trash}<span>Удалить</span></button>`;
+    const deleteFooterHtml = `<button type="button" class="drawer-delete-btn" data-drawer-delete="${item.id}" title="Удалить запись">${UI_ICONS.trash}<span>Удалить</span></button>`;
     return `${reenrichHtml}${deleteFooterHtml}`;
   }
 
@@ -2120,7 +2244,7 @@
     }
     const sourcePoster = wasClosed && !skipTransition ? findCatalogPosterEl(numId) : null;
     state.drawerItemId = numId;
-    state.drawerConfirmDelete = false;
+    state.drawerProgressExpanded = window.innerWidth > 820;
     state.drawerEditMode = false;
     state.drawerAddTagMode = false;
     state.drawerAddHighlightMode = false;
@@ -2197,7 +2321,7 @@
 
     state.drawerItemId = null;
     state.externalDrawerItem = null;
-    state.drawerConfirmDelete = false;
+    state.drawerProgressExpanded = false;
     state.drawerEditMode = false;
     state.drawerAddTagMode = false;
     state.drawerAddHighlightMode = false;
@@ -2350,6 +2474,17 @@
   });
 
   drawerBody.addEventListener("click", async (e) => {
+    if (e.target.closest("[data-drawer-progress-toggle]")) {
+      state.drawerProgressExpanded = !state.drawerProgressExpanded;
+      const item = findDrawerItem(state.drawerItemId);
+      const progSlot = document.getElementById("drawerProgressSlot");
+      if (item && progSlot) {
+        progSlot.innerHTML = buildDrawerProgressHtml(item);
+      }
+      haptic("selection");
+      return;
+    }
+
     const zenBtn = e.target.closest("[data-open-zen-reader]");
     if (zenBtn && zenBtn.dataset.openZenReader) {
       openZenReader(Number(zenBtn.dataset.openZenReader));
@@ -2639,31 +2774,15 @@
       return;
     }
 
-    if (e.target.closest("[data-drawer-delete-ask]")) {
-      state.drawerConfirmDelete = true;
-      const item = findDrawerItem(state.drawerItemId);
-      const footer = document.getElementById("drawerActionsFooter");
-      if (item && footer) footer.innerHTML = buildDrawerActionsFooterHtml(item);
-      return;
-    }
-
-    if (e.target.closest("[data-drawer-delete-cancel]")) {
-      state.drawerConfirmDelete = false;
-      const item = findDrawerItem(state.drawerItemId);
-      const footer = document.getElementById("drawerActionsFooter");
-      if (item && footer) footer.innerHTML = buildDrawerActionsFooterHtml(item);
-      return;
-    }
-
-    const delConfirm = e.target.closest("[data-drawer-delete-confirm]");
-    if (delConfirm) {
-      const id = Number(delConfirm.dataset.drawerDeleteConfirm);
+    const delBtn = e.target.closest("[data-drawer-delete]");
+    if (delBtn && delBtn.dataset.drawerDelete) {
+      const id = Number(delBtn.dataset.drawerDelete);
       const wasTriage = state.triageMode;
       if (wasTriage) {
         await deleteItem(id);
         advanceInboxTriage({ processed: true, currentId: id });
       } else {
-        closeDetailDrawer();
+        closeDetailDrawer({ skipTransition: true });
         await deleteItem(id);
       }
     }
@@ -2919,15 +3038,18 @@
     renderFiltersSheet();
     filtersSheetOverlay.classList.remove("hidden");
     filtersSheetOverlay.setAttribute("aria-hidden", "false");
+    pushOverlayHistory("filters");
     syncTelegramBackButton();
     haptic("light");
   }
 
-  function closeFiltersSheet() {
+  function closeFiltersSheet(opts = {}) {
     if (!state.filtersSheetOpen) return;
+    const fromPopstate = Boolean(opts && opts.fromPopstate);
     state.filtersSheetOpen = false;
     filtersSheetOverlay.classList.add("hidden");
     filtersSheetOverlay.setAttribute("aria-hidden", "true");
+    popOverlayHistory("filters", fromPopstate);
     syncTelegramBackButton();
   }
 
@@ -5170,7 +5292,10 @@
     closeStatusPopover();
     closeRatingPopover();
     closeOpenSwipeRow();
-    closeFiltersSheet();
+    const hadFilters = state.filtersSheetOpen;
+    if (hadFilters) {
+      closeFiltersSheet({ fromPopstate: true });
+    }
     closeShortcutsModal();
     closeCmdPalette();
     state.quickAddOpen = true;
@@ -5193,18 +5318,30 @@
       quickAddOverlay.classList.remove("hidden");
       quickAddOverlay.setAttribute("aria-hidden", "false");
     }
+    if (hadFilters) {
+      try {
+        window.history.replaceState({ ...(window.history.state || {}), sbOverlay: "quickadd" }, "", window.location.href);
+        overlayHistoryStack.push("quickadd");
+      } catch {
+        pushOverlayHistory("quickadd");
+      }
+    } else {
+      pushOverlayHistory("quickadd");
+    }
     syncTelegramBackButton();
     setTimeout(() => quickAddInput && quickAddInput.focus(), 60);
     haptic("light");
   }
 
-  function closeQuickAddModal() {
+  function closeQuickAddModal(opts = {}) {
     if (!state.quickAddOpen) return;
+    const fromPopstate = Boolean(opts && opts.fromPopstate);
     state.quickAddOpen = false;
     if (quickAddOverlay) {
       quickAddOverlay.classList.add("hidden");
       quickAddOverlay.setAttribute("aria-hidden", "true");
     }
+    popOverlayHistory("quickadd", fromPopstate);
     syncTelegramBackButton();
   }
 
@@ -5647,19 +5784,28 @@
   // ==================== СВАЙПЫ ШТОРОК ВНИЗ И СТРОК В МОБИЛЬНОЙ ВЕРСИИ ====================
   function bindSheetSwipeToClose(sheetEl, onClose, options = {}) {
     if (!sheetEl) return;
+    let startX = 0;
     let startY = 0;
     let deltaY = 0;
+    let axis = null;
     let active = false;
+    let springTimer = null;
 
     sheetEl.addEventListener(
       "touchstart",
       (e) => {
         if (window.innerWidth > 820 || e.touches.length !== 1) return;
+        if (state.zenReaderItemId !== null) return;
+        if (posterLightbox && !posterLightbox.classList.contains("hidden")) return;
+        if (e.target.closest('input, textarea, select, [type="range"]')) return;
         const scroller = options.scrollEl ? options.scrollEl() : null;
         const inHandle = Boolean(e.target.closest(".sheet-handle, .drawer-header"));
         if (scroller && scroller.scrollTop > 2 && !inHandle) return;
+        clearTimeout(springTimer);
+        startX = e.touches[0].clientX;
         startY = e.touches[0].clientY;
         deltaY = 0;
+        axis = null;
         active = true;
       },
       { passive: true }
@@ -5669,11 +5815,29 @@
       "touchmove",
       (e) => {
         if (!active || e.touches.length !== 1) return;
+        const dx = e.touches[0].clientX - startX;
         const dy = e.touches[0].clientY - startY;
-        if (dy > 0) {
-          deltaY = dy;
-          sheetEl.style.transition = "none";
-          sheetEl.style.transform = `translateY(${Math.min(dy, 260)}px)`;
+        if (axis === null) {
+          if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+          if (dy > 8 && dy > Math.abs(dx) * 1.35) {
+            axis = "y";
+          } else if (Math.abs(dx) > Math.abs(dy) * 1.2 || dy < -8) {
+            axis = "x";
+            active = false;
+            return;
+          } else {
+            return;
+          }
+        }
+        if (axis === "y") {
+          if (dy > 0) {
+            deltaY = dy;
+            sheetEl.style.transition = "none";
+            sheetEl.style.transform = `translateY(${Math.min(dy, 260)}px)`;
+          } else {
+            deltaY = 0;
+            sheetEl.style.transform = "";
+          }
         }
       },
       { passive: true }
@@ -5682,22 +5846,126 @@
     const finish = () => {
       if (!active) return;
       active = false;
-      sheetEl.style.transition = "";
-      sheetEl.style.transform = "";
-      if (deltaY > 75) {
-        onClose();
-      }
+      const shouldClose = axis === "y" && deltaY > 75;
+      axis = null;
       deltaY = 0;
+      if (shouldClose) {
+        sheetEl.style.transition = "";
+        sheetEl.style.transform = "";
+        onClose();
+      } else {
+        sheetEl.style.transition = "transform 0.2s cubic-bezier(0.22, 1, 0.36, 1)";
+        sheetEl.style.transform = "";
+        springTimer = setTimeout(() => {
+          if (sheetEl) sheetEl.style.transition = "";
+        }, 210);
+      }
     };
     sheetEl.addEventListener("touchend", finish, { passive: true });
     sheetEl.addEventListener("touchcancel", finish, { passive: true });
   }
 
   bindSheetSwipeToClose(drawerEl, () => closeDetailDrawer({ skipTransition: true }), { scrollEl: () => drawerBody });
-  bindSheetSwipeToClose(document.getElementById("filtersSheet"), closeFiltersSheet, {
+  bindSheetSwipeToClose(document.getElementById("filtersSheet"), () => closeFiltersSheet(), {
     scrollEl: () => filtersSheetBody,
   });
-  bindSheetSwipeToClose(quickAddSheet, closeQuickAddModal);
+  bindSheetSwipeToClose(quickAddSheet, () => closeQuickAddModal());
+
+  (function bindDrawerHorizontalNavSwipe() {
+    if (!drawerEl || !drawerBody) return;
+    let startX = 0;
+    let startY = 0;
+    let dx = 0;
+    let locked = null;
+    let tracking = false;
+    let springTimer = null;
+
+    drawerEl.addEventListener(
+      "touchstart",
+      (e) => {
+        if (window.innerWidth > 820 || e.touches.length !== 1) return;
+        if (state.drawerItemId === null || state.drawerEditMode || state.zenReaderItemId !== null) return;
+        if (posterLightbox && !posterLightbox.classList.contains("hidden")) return;
+        if (state.items.length < 2) return;
+        const x = e.touches[0].clientX;
+        if (x < 28 || x > window.innerWidth - 28) return;
+        if (
+          e.target.closest(
+            'input, textarea, select, [type="range"], .drawer-status-pills, .drawer-rating-scale, .genres-line, .ratings-bar, .progress-stepper-row, pre, code'
+          )
+        ) {
+          return;
+        }
+        clearTimeout(springTimer);
+        startX = x;
+        startY = e.touches[0].clientY;
+        dx = 0;
+        locked = null;
+        tracking = true;
+      },
+      { passive: true }
+    );
+
+    drawerEl.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!tracking || e.touches.length !== 1) return;
+        const curDx = e.touches[0].clientX - startX;
+        const curDy = e.touches[0].clientY - startY;
+        if (locked === null) {
+          if (Math.abs(curDx) < 12 && Math.abs(curDy) < 12) return;
+          if (Math.abs(curDx) > 16 && Math.abs(curDx) > Math.abs(curDy) * 1.7) {
+            locked = "x";
+            drawerBody.style.transition = "none";
+          } else {
+            locked = "y";
+            tracking = false;
+            return;
+          }
+        }
+        if (locked === "x") {
+          dx = curDx;
+          const idx = state.items.findIndex((i) => Number(i.id) === Number(state.drawerItemId));
+          const blockedPrev = idx <= 0 && dx > 0;
+          const blockedNext = (idx === -1 || idx >= state.items.length - 1) && dx < 0;
+          const damp = blockedPrev || blockedNext ? 0.22 : 0.48;
+          const clamped = Math.max(-56, Math.min(56, Math.round(dx * damp)));
+          drawerBody.style.transform = `translateX(${clamped}px)`;
+        }
+      },
+      { passive: true }
+    );
+
+    const endNavSwipe = () => {
+      if (!tracking && locked !== "x") return;
+      const wasX = locked === "x";
+      const endDx = dx;
+      tracking = false;
+      locked = null;
+      dx = 0;
+      if (!wasX) return;
+
+      drawerBody.style.transition = "transform 0.18s cubic-bezier(0.22, 1, 0.36, 1)";
+      drawerBody.style.transform = "";
+      springTimer = setTimeout(() => {
+        if (drawerBody) drawerBody.style.transition = "";
+      }, 190);
+
+      if (Math.abs(endDx) > 62) {
+        const idx = state.items.findIndex((i) => Number(i.id) === Number(state.drawerItemId));
+        if (endDx < 0 && idx !== -1 && idx < state.items.length - 1) {
+          haptic("light");
+          navigateDrawer(1);
+        } else if (endDx > 0 && idx > 0) {
+          haptic("light");
+          navigateDrawer(-1);
+        }
+      }
+    };
+
+    drawerEl.addEventListener("touchend", endNavSwipe, { passive: true });
+    drawerEl.addEventListener("touchcancel", endNavSwipe, { passive: true });
+  })();
 
   (function bindMobileRowSwipe() {
     const TRAY_WIDTH = 148;
@@ -5724,6 +5992,8 @@
       "touchstart",
       (e) => {
         if (window.innerWidth > 820 || state.view !== "catalog" || state.viewMode !== "list") return;
+        if (state.drawerItemId !== null || state.zenReaderItemId !== null) return;
+        if (posterLightbox && !posterLightbox.classList.contains("hidden")) return;
         if (state.selectedIds.size > 0) return;
         if (e.touches.length !== 1) return;
         if (e.target.closest(".swipe-tray")) return;
@@ -6340,32 +6610,42 @@
     }
 
     if (e.key === "Escape") {
+      const lightboxOpen = posterLightbox && !posterLightbox.classList.contains("hidden");
+      if (lightboxOpen) {
+        closePosterLightbox();
+        return;
+      }
       if (state.zenReaderItemId !== null) {
         closeZenReader();
         return;
       }
-      const lightboxOpen = posterLightbox && !posterLightbox.classList.contains("hidden");
-      if (
-        state.selectedIds.size > 0 &&
-        !lightboxOpen &&
-        state.drawerItemId === null &&
-        !state.cmdPaletteOpen &&
-        !state.quickAddOpen &&
-        !state.shortcutsOpen &&
-        !state.filtersSheetOpen
-      ) {
+      if (state.shortcutsOpen) {
+        closeShortcutsModal();
+        return;
+      }
+      if (state.cmdPaletteOpen) {
+        closeCmdPalette();
+        return;
+      }
+      if (state.quickAddOpen) {
+        closeQuickAddModal();
+        return;
+      }
+      if (state.filtersSheetOpen) {
+        closeFiltersSheet();
+        return;
+      }
+      if (state.drawerItemId !== null || state.triageCompletedView) {
+        closeDetailDrawer();
+        return;
+      }
+      if (state.selectedIds.size > 0) {
         clearBulkSelection();
         return;
       }
       closeStatusPopover();
       closeRatingPopover();
       closeOpenSwipeRow();
-      closePosterLightbox();
-      closeShortcutsModal();
-      closeCmdPalette();
-      closeQuickAddModal();
-      closeDetailDrawer();
-      closeFiltersSheet();
       clearListFocus();
       return;
     }
@@ -6557,6 +6837,26 @@
   })();
 
   window.addEventListener("popstate", () => {
+    if (ignoreOverlayPopCount > 0) {
+      ignoreOverlayPopCount -= 1;
+      return;
+    }
+    if (posterLightbox && !posterLightbox.classList.contains("hidden")) {
+      closePosterLightbox({ fromPopstate: true });
+      return;
+    }
+    if (state.zenReaderItemId !== null) {
+      closeZenReader({ fromPopstate: true });
+      return;
+    }
+    if (state.quickAddOpen) {
+      closeQuickAddModal({ fromPopstate: true });
+      return;
+    }
+    if (state.filtersSheetOpen) {
+      closeFiltersSheet({ fromPopstate: true });
+      return;
+    }
     const urlItemId = restoreStateFromUrl();
     syncSearchQueryState(state.q);
     if (urlItemId === null && state.drawerItemId !== null) {
@@ -6931,6 +7231,7 @@
     renderZenReader();
     zenReaderOverlayEl.classList.remove("hidden");
     zenReaderOverlayEl.setAttribute("aria-hidden", "false");
+    pushOverlayHistory("zen");
     syncTelegramBackButton();
 
     const meta = parseMeta(item.meta);
@@ -6952,8 +7253,9 @@
     haptic("light");
   }
 
-  function closeZenReader() {
+  function closeZenReader(opts = {}) {
     if (state.zenReaderItemId === null || !zenReaderOverlayEl) return;
+    const fromPopstate = Boolean(opts && opts.fromPopstate);
     const closingId = state.zenReaderItemId;
     const item = findDrawerItem(closingId);
     const pct = computeCurrentZenScrollPct();
@@ -6962,6 +7264,7 @@
     state.zenReaderItemId = null;
     zenReaderOverlayEl.classList.add("hidden");
     zenReaderOverlayEl.setAttribute("aria-hidden", "true");
+    popOverlayHistory("zen", fromPopstate);
     syncTelegramBackButton();
 
     if (
@@ -7206,9 +7509,10 @@
           state.quickAddOpen ||
           state.cmdPaletteOpen ||
           state.shortcutsOpen ||
+          (posterLightbox && !posterLightbox.classList.contains("hidden")) ||
           (authModal && !authModal.classList.contains("hidden"));
         if (anyOverlay) return;
-        if (e.target.closest("#statusPillsBar, #tagBar, #mobileCategoryTabs, input, textarea, select")) return;
+        if (e.target.closest("#statusPillsBar, #tagBar, #mobileCategoryTabs, .view-kanban, .kanban-col, input, textarea, select")) return;
         startX = e.touches[0].clientX;
         startY = e.touches[0].clientY;
         pullDist = 0;

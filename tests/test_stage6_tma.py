@@ -558,7 +558,7 @@ class TestStage6TMA(unittest.TestCase):
             status="inbox",
         )
         conn.execute(
-            "UPDATE items SET updated_at = '2026-11-20 12:00:00' WHERE id = ?",
+            "UPDATE items SET updated_at = datetime('now', '+1 day') WHERE id = ?",
             (it_a["id"],),
         )
         conn.commit()
@@ -944,10 +944,10 @@ class TestStage6TMA(unittest.TestCase):
         css = (tma_dir / "styles.css").read_text(encoding="utf-8")
         js = (tma_dir / "app.js").read_text(encoding="utf-8")
 
-        # 1. Версия ассетов v32, PWA-манифест + иконки + Service Worker, Literata
-        self.assertIn("./styles.css?v=32", html)
-        self.assertIn("./app.js?v=32", html)
-        self.assertIn("./manifest.webmanifest?v=32", html)
+        # 1. Версия ассетов v33, PWA-манифест + иконки + Service Worker, Literata
+        self.assertIn("./styles.css?v=33", html)
+        self.assertIn("./app.js?v=33", html)
+        self.assertIn("./manifest.webmanifest?v=33", html)
         self.assertEqual(mimetypes.guess_type("manifest.webmanifest")[0], "application/manifest+json")
         self.assertIn("Literata", html)
         self.assertIn('data-mode="posters"', html)
@@ -957,7 +957,7 @@ class TestStage6TMA(unittest.TestCase):
 
         for fname in ("manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
             self.assertTrue((tma_dir / fname).is_file(), f"Missing PWA asset: {fname}")
-        self.assertIn("notes-shell-v32", (tma_dir / "sw.js").read_text(encoding="utf-8"))
+        self.assertIn("notes-shell-v33", (tma_dir / "sw.js").read_text(encoding="utf-8"))
         self.assertTrue((tma_dir / "icon-192.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertTrue((tma_dir / "icon-512.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         manifest = json.loads((tma_dir / "manifest.webmanifest").read_text(encoding="utf-8"))
@@ -1052,6 +1052,8 @@ class TestStage6TMA(unittest.TestCase):
             "poster-progress-bar",
             "drawer-highlight-card",
             "drawer-attention-banner",
+            "progress-toggle-head",
+            "touch-action: pinch-zoom",
         ):
             self.assertIn(token, css)
 
@@ -1108,6 +1110,12 @@ class TestStage6TMA(unittest.TestCase):
             "buildDrawerHighlightsHtml",
             "reenrichItemInDrawer",
             "getItemProgressSummary",
+            "pushOverlayHistory",
+            "popOverlayHistory",
+            "bindLightboxSwipe",
+            "bindDrawerHorizontalNavSwipe",
+            "drawerProgressExpanded",
+            "data-drawer-delete",
         ):
             self.assertIn(token, js)
 
