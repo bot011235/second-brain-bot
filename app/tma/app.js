@@ -5371,6 +5371,29 @@
       haptic("selection");
     });
   }
+  function splitBatchLinesClient(text) {
+    const out = [];
+    String(text || "")
+      .split(/\r?\n/)
+      .forEach((rawLine) => {
+        const cleaned = rawLine.replace(/^\s*(?:\d+[.\)\-:]|[-•*—–])\s*/, "").trim();
+        if (cleaned) out.push(cleaned);
+      });
+    return out;
+  }
+
+  async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 40000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      const data = await res.json().catch(() => ({}));
+      return { res, data };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   if (quickAddForm) {
     quickAddForm.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -5384,18 +5407,142 @@
         quickAddStatus.textContent = "Ищу данные, рейтинги и теги...";
         quickAddStatus.classList.remove("hidden", "error");
       }
+
+      const isBatchEligible =
+        (selectedAddTopic === "books" || selectedAddTopic === "movies") && !/https?:\/\//i.test(rawText);
+      const batchLines = isBatchEligible ? splitBatchLinesClient(rawText) : [];
+
       try {
-        const res = await fetch("/api/items", {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ text: rawText, topic: selectedAddTopic }),
-        });
+        if (batchLines.length > 1) {
+          // 1. Фиксируем исходный список в «Оригиналах» одним быстрым запросом
+          try {
+            const origResp = await fetchJsonWithTimeout(
+              "/api/items",
+              {
+                method: "POST",
+                headers: authHeaders(),
+                body: JSON.stringify({
+                  text: rawText,
+                  topic: selectedAddTopic,
+                  record_original_only: true,
+                }),
+              },
+              15000
+            );
+            if (origResp.res.status === 401 || origResp.res.status === 403) {
+              closeQuickAddModal();
+              showAuthModal(origResp.res.status === 403 && Boolean(tg && tg.initData));
+              return;
+            }
+          } catch {
+            // Не останавливаем пакетную загрузку при сбое записи оригинала
+          }
+
+          // 2. Обрабатываем построчно (concurrency = 2), чтобы обходить HTTP-тайм-ауты и видеть прогресс
+          const total = batchLines.length;
+          let nextIdx = 0;
+          let started = 0;
+          let done = 0;
+          let created = 0;
+          let duplicates = 0;
+          let needsInput = 0;
+          const failedLines = [];
+          let authAborted = false;
+
+          const runWorker = async () => {
+            while (!authAborted) {
+              const i = nextIdx;
+              nextIdx += 1;
+              if (i >= total) return;
+
+              const line = batchLines[i];
+              started += 1;
+              const shortLine = line.length > 42 ? `${line.slice(0, 42)}…` : line;
+              if (quickAddStatus) {
+                quickAddStatus.textContent = `Обработка ${started} из ${total}: ${shortLine}`;
+              }
+
+              try {
+                const { res, data } = await fetchJsonWithTimeout(
+                  "/api/items",
+                  {
+                    method: "POST",
+                    headers: authHeaders(),
+                    body: JSON.stringify({
+                      text: line,
+                      topic: selectedAddTopic,
+                      skip_original: true,
+                    }),
+                  },
+                  35000
+                );
+                if (res.status === 401 || res.status === 403) {
+                  authAborted = true;
+                  closeQuickAddModal();
+                  showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
+                  return;
+                }
+                if (!res.ok) {
+                  failedLines.push(line);
+                } else if (data.status === "duplicate_item" || data.status === "duplicate") {
+                  duplicates += 1;
+                } else if (data.status === "needs_input") {
+                  needsInput += 1;
+                } else {
+                  created += 1;
+                }
+              } catch {
+                failedLines.push(line);
+              } finally {
+                done += 1;
+                if (quickAddSubmitBtn) {
+                  quickAddSubmitBtn.textContent = `Обработка ${done}/${total}...`;
+                }
+              }
+            }
+          };
+
+          await Promise.all([runWorker(), runWorker()]);
+          if (authAborted) return;
+
+          clearCatalogCache();
+          state.view = "catalog";
+          refreshCurrentView();
+
+          if (failedLines.length === 0) {
+            if (quickAddInput) quickAddInput.value = "";
+            closeQuickAddModal();
+            haptic("medium");
+            const parts = [];
+            if (created) parts.push(`добавлено: ${created}`);
+            if (duplicates) parts.push(`уже в базе: ${duplicates}`);
+            if (needsInput) parts.push(`требуют уточнения: ${needsInput}`);
+            showLiveToast(`✅ Список обработан (${parts.join(", ") || `всего: ${total}`})`, { durationMs: 5000 });
+          } else {
+            if (quickAddInput) quickAddInput.value = failedLines.join("\n");
+            if (quickAddStatus) {
+              quickAddStatus.textContent = `Добавлено: ${created + duplicates + needsInput}, ошибок: ${failedLines.length}. Недобавленные строки оставлены в поле — можно повторить.`;
+              quickAddStatus.classList.remove("hidden");
+              quickAddStatus.classList.add("error");
+            }
+          }
+          return;
+        }
+
+        const { res, data } = await fetchJsonWithTimeout(
+          "/api/items",
+          {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({ text: rawText, topic: selectedAddTopic }),
+          },
+          45000
+        );
         if (res.status === 401 || res.status === 403) {
           closeQuickAddModal();
           showAuthModal(res.status === 403 && Boolean(tg && tg.initData));
           return;
         }
-        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           if (quickAddStatus) {
             quickAddStatus.textContent = data.detail || "Не удалось добавить запись.";
@@ -5410,9 +5557,12 @@
         state.view = "catalog";
         refreshCurrentView();
         haptic("medium");
-      } catch {
+      } catch (err) {
         if (quickAddStatus) {
-          quickAddStatus.textContent = "Ошибка сети при сохранении.";
+          const isTimeout = err && err.name === "AbortError";
+          quickAddStatus.textContent = isTimeout
+            ? "Превышено время ожидания ответа сервера. Попробуйте ещё раз."
+            : "Ошибка сети при сохранении.";
           quickAddStatus.classList.remove("hidden");
           quickAddStatus.classList.add("error");
         }

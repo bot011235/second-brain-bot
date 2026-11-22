@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import re
 from typing import Any
 
@@ -157,6 +158,30 @@ def _record_original_message(
         pass
 
 
+def _prefetch_movie(
+    text: str,
+    tmdb: TMDBClient | None = None,
+    *,
+    title_orig: str | None = None,
+    auto_pick_first: bool = False,
+) -> dict[str, Any]:
+    """Чисто сетевой поиск и обогащение фильма (безопасно запускать в потоке без conn)."""
+    query, year = movies_pipeline.parse_title_and_year(text)
+    candidates = movies_pipeline.search_movie_candidates(
+        query, year=year, tmdb=tmdb, limit=3, title_orig=title_orig, raw_text=text
+    )
+    enriched: dict[str, Any] | None = None
+    if candidates and ((auto_pick_first and candidates) or movies_pipeline.is_unambiguous_match(query, year, candidates, title_orig=title_orig)):
+        enriched = movies_pipeline.enrich_candidate(candidates[0], tmdb=tmdb)
+    return {
+        "line": text,
+        "query": query,
+        "year": year,
+        "candidates": candidates,
+        "enriched": enriched,
+    }
+
+
 def _handle_movie_text(
     conn: Any,
     text: str,
@@ -169,11 +194,19 @@ def _handle_movie_text(
     source_type: str = "manual",
     title_orig: str | None = None,
     auto_pick_first: bool = False,
+    prefetched: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    query, year = movies_pipeline.parse_title_and_year(text)
-    candidates = movies_pipeline.search_movie_candidates(
-        query, year=year, tmdb=tmdb, limit=3, title_orig=title_orig, raw_text=text
-    )
+    if prefetched is not None:
+        query = prefetched["query"]
+        year = prefetched["year"]
+        candidates = prefetched["candidates"]
+        enriched = prefetched.get("enriched")
+    else:
+        query, year = movies_pipeline.parse_title_and_year(text)
+        candidates = movies_pipeline.search_movie_candidates(
+            query, year=year, tmdb=tmdb, limit=3, title_orig=title_orig, raw_text=text
+        )
+        enriched = None
 
     if not candidates:
         item = repo.create_item(
@@ -191,10 +224,11 @@ def _handle_movie_text(
         _publish_and_replace(conn, tg, item, chat_id, thread_id, user_msg_id)
         return {"status": "needs_input", "item_id": item["id"]}
 
-    if (auto_pick_first and candidates) or movies_pipeline.is_unambiguous_match(
+    if enriched is not None or (auto_pick_first and candidates) or movies_pipeline.is_unambiguous_match(
         query, year, candidates, title_orig=title_orig
     ):
-        enriched = movies_pipeline.enrich_candidate(candidates[0], tmdb=tmdb)
+        if enriched is None:
+            enriched = movies_pipeline.enrich_candidate(candidates[0], tmdb=tmdb)
         existing = repo.find_existing_movie(
             conn,
             kp_id=enriched.get("kp_id"),
@@ -253,6 +287,26 @@ def _handle_movie_text(
     return {"status": "needs_choice", "item_id": item["id"], "candidates": len(candidates[:3])}
 
 
+def _prefetch_book(
+    text: str,
+    books_client: BooksClient | None = None,
+    *,
+    auto_pick_first: bool = False,
+) -> dict[str, Any]:
+    """Чисто сетевой поиск и обогащение книги (безопасно запускать в потоке без conn)."""
+    query = text.splitlines()[0].strip()
+    candidates = books_pipeline.search_book_candidates(query, books_client=books_client, limit=3)
+    enriched: dict[str, Any] | None = None
+    if candidates and ((auto_pick_first and candidates) or books_pipeline.is_unambiguous_book_match(query, candidates)):
+        enriched = books_pipeline.enrich_book_candidate(candidates[0])
+    return {
+        "line": text,
+        "query": query,
+        "candidates": candidates,
+        "enriched": enriched,
+    }
+
+
 def _handle_book_text(
     conn: Any,
     text: str,
@@ -264,9 +318,16 @@ def _handle_book_text(
     source_url: str | None = None,
     source_type: str = "manual",
     auto_pick_first: bool = False,
+    prefetched: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    query = text.splitlines()[0].strip()
-    candidates = books_pipeline.search_book_candidates(query, books_client=books_client, limit=3)
+    if prefetched is not None:
+        query = prefetched["query"]
+        candidates = prefetched["candidates"]
+        enriched = prefetched.get("enriched")
+    else:
+        query = text.splitlines()[0].strip()
+        candidates = books_pipeline.search_book_candidates(query, books_client=books_client, limit=3)
+        enriched = None
 
     if not candidates:
         item = repo.create_item(
@@ -282,8 +343,9 @@ def _handle_book_text(
         _publish_and_replace(conn, tg, item, chat_id, thread_id, user_msg_id)
         return {"status": "needs_input", "item_id": item["id"]}
 
-    if (auto_pick_first and candidates) or books_pipeline.is_unambiguous_book_match(query, candidates):
-        enriched = books_pipeline.enrich_book_candidate(candidates[0])
+    if enriched is not None or (auto_pick_first and candidates) or books_pipeline.is_unambiguous_book_match(query, candidates):
+        if enriched is None:
+            enriched = books_pipeline.enrich_book_candidate(candidates[0])
         existing = repo.find_existing_book(
             conn,
             google_books_id=enriched.get("google_books_id"),
@@ -347,6 +409,7 @@ def _handle_message(
     *,
     override_topic_name: str | None = None,
     auto_pick_first: bool = False,
+    skip_original: bool = False,
 ) -> dict[str, Any]:
     chat_id = msg.get("chat", {}).get("id")
     user_id = msg.get("from", {}).get("id")
@@ -364,23 +427,36 @@ def _handle_message(
 
     # Этап 2: запросы в топике Movies (поддерживает и 1 фильм, и список фильмов построчно)
     if topic_name == "movies" and (not url or movies_pipeline.parse_direct_media_ids(text)):
-        _record_original_message(
-            conn,
-            topic_name=topic_name,
-            category="movie",
-            raw_text=text,
-            thread_id=thread_id,
-            msg_id=msg_id,
-            source_url=url,
-            source_type=source_type,
-        )
+        if not skip_original:
+            _record_original_message(
+                conn,
+                topic_name=topic_name,
+                category="movie",
+                raw_text=text,
+                thread_id=thread_id,
+                msg_id=msg_id,
+                source_url=url,
+                source_type=source_type,
+            )
         lines = split_batch_lines(text) if not url else [text]
         if len(lines) > 1:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                prefetched_list = list(
+                    pool.map(lambda ln: _prefetch_movie(ln, tmdb, auto_pick_first=auto_pick_first), lines)
+                )
             results = [
                 _handle_movie_text(
-                    conn, line, chat_id, thread_id, None, tg, tmdb=tmdb, auto_pick_first=auto_pick_first
+                    conn,
+                    p["line"],
+                    chat_id,
+                    thread_id,
+                    None,
+                    tg,
+                    tmdb=tmdb,
+                    auto_pick_first=auto_pick_first,
+                    prefetched=p,
                 )
-                for line in lines
+                for p in prefetched_list
             ]
             if chat_id and msg_id and settings.telegram_bot_token:
                 try:
@@ -403,22 +479,35 @@ def _handle_message(
 
     # Этап 3: запросы в топике Books (поддерживает и 1 книгу, и список книг построчно)
     if topic_name == "books" and not url:
-        _record_original_message(
-            conn,
-            topic_name=topic_name,
-            category="book",
-            raw_text=text,
-            thread_id=thread_id,
-            msg_id=msg_id,
-            source_type="manual",
-        )
+        if not skip_original:
+            _record_original_message(
+                conn,
+                topic_name=topic_name,
+                category="book",
+                raw_text=text,
+                thread_id=thread_id,
+                msg_id=msg_id,
+                source_type="manual",
+            )
         lines = split_batch_lines(text)
         if len(lines) > 1:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                prefetched_list = list(
+                    pool.map(lambda ln: _prefetch_book(ln, books_client, auto_pick_first=auto_pick_first), lines)
+                )
             results = [
                 _handle_book_text(
-                    conn, line, chat_id, thread_id, None, tg, books_client=books_client, auto_pick_first=auto_pick_first
+                    conn,
+                    p["line"],
+                    chat_id,
+                    thread_id,
+                    None,
+                    tg,
+                    books_client=books_client,
+                    auto_pick_first=auto_pick_first,
+                    prefetched=p,
                 )
-                for line in lines
+                for p in prefetched_list
             ]
             if chat_id and msg_id and settings.telegram_bot_token:
                 try:
@@ -467,18 +556,19 @@ def _handle_message(
             if not scraped.get("ok") and text.strip() == url.strip():
                 processing_status = "needs_input"
 
-        _record_original_message(
-            conn,
-            topic_name=topic_name,
-            category=category,
-            raw_text=text,
-            thread_id=thread_id,
-            msg_id=msg_id,
-            source_url=canonical_url,
-            source_type=source_type,
-            author=creator,
-            extracted_text=raw_desc or raw_title,
-        )
+        if not skip_original:
+            _record_original_message(
+                conn,
+                topic_name=topic_name,
+                category=category,
+                raw_text=text,
+                thread_id=thread_id,
+                msg_id=msg_id,
+                source_url=canonical_url,
+                source_type=source_type,
+                author=creator,
+                extracted_text=raw_desc or raw_title,
+            )
 
         if topic_name not in ("movies", "books"):
             existing_url_item = repo.find_existing_by_url(conn, canonical_url)
@@ -565,15 +655,16 @@ def _handle_message(
                 merged_tags.append(clean_t)
         tags = merged_tags[:6]
     else:
-        _record_original_message(
-            conn,
-            topic_name=topic_name,
-            category=category,
-            raw_text=text,
-            thread_id=thread_id,
-            msg_id=msg_id,
-            source_type="manual",
-        )
+        if not skip_original:
+            _record_original_message(
+                conn,
+                topic_name=topic_name,
+                category=category,
+                raw_text=text,
+                thread_id=thread_id,
+                msg_id=msg_id,
+                source_type="manual",
+            )
         tags = extract_hashtags(text)
         if category == "idea" and settings.llm_for_ideas:
             llm = GroqLLMClient()
@@ -764,6 +855,8 @@ def ingest_web_item(
     topic: str = "auto",
     tmdb: TMDBClient | None = None,
     books_client: BooksClient | None = None,
+    skip_original: bool = False,
+    record_original_only: bool = False,
 ) -> dict[str, Any]:
     """Добавление и автообогащение записи напрямую с веб-витрины / TMA."""
     clean = (text or "").strip()
@@ -797,6 +890,19 @@ def ingest_web_item(
         "articles": settings.topic_articles_id or None,
     }.get(topic_name)
 
+    if record_original_only:
+        category, url, source_type = infer_category(topic_name, clean)
+        _record_original_message(
+            conn,
+            topic_name=topic_name,
+            category=category,
+            raw_text=clean,
+            thread_id=thread_id,
+            source_url=url,
+            source_type=source_type,
+        )
+        return {"status": "original_recorded", "topic": topic_name}
+
     synthetic_msg = {
         "chat": {"id": settings.tg_chat_id},
         "from": {"id": settings.allowed_tg_user_id},
@@ -811,6 +917,7 @@ def ingest_web_item(
         books_client=books_client,
         override_topic_name=topic_name,
         auto_pick_first=True,
+        skip_original=skip_original,
     )
 
 

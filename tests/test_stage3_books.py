@@ -137,6 +137,141 @@ class TestStage3Books(unittest.TestCase):
         self.assertEqual(res2["status"], "duplicate_item")
         self.assertEqual(res2["item_id"], item_id)
 
+    def test_parse_book_query_and_relevance_filtering(self) -> None:
+        from app.clients.books import BooksClient, _score_book_candidate, _is_relevant_book_candidate, parse_book_query
+
+        self.assertEqual(
+            parse_book_query("1. Американский психопат — Брет Истон Эллис (1991)"),
+            ("Американский психопат", "Брет Истон Эллис", 1991),
+        )
+        self.assertEqual(
+            parse_book_query("7. Уловка-22 — Джозеф Хеллер (1961)"),
+            ("Уловка-22", "Джозеф Хеллер", 1961),
+        )
+        self.assertEqual(
+            parse_book_query("Мартин Хайдеггер Бытие и время"),
+            ("Мартин Хайдеггер Бытие и время", None, None),
+        )
+
+        # Мусор Google Books отбрасывается
+        garbage = {
+            "source": "google_books",
+            "title_ru": "ТЕЛЕНЕДЕЛЯ для всей семьи. Москва 48",
+            "creator": "Редакция журнала",
+            "release_year": 2015,
+        }
+        self.assertFalse(_is_relevant_book_candidate(garbage, "Дерьмо", "Ирвин Уэлш", 1998))
+
+        # Книга 'Лёд (2011)' выигрывает у серии 'Майор Мартен Сервас'
+        series_cand = {
+            "source": "fantlab",
+            "fantlab_id": 100,
+            "title_ru": "Майор Мартен Сервас",
+            "creator": "Бернар Миньер",
+            "release_year": None,
+        }
+        novel_cand = {
+            "source": "fantlab",
+            "fantlab_id": 200,
+            "title_ru": "Лёд",
+            "title_orig": "Glacé",
+            "creator": "Бернар Миньер",
+            "release_year": 2011,
+            "rating_fantlab": 6.72,
+        }
+        self.assertGreater(
+            _score_book_candidate(novel_cand, "Лёд", "Бернар Миньер", 2011),
+            _score_book_candidate(series_cand, "Лёд", "Бернар Миньер", 2011),
+        )
+
+        # Между двумя огнями — Кристофер Бюльман (2012) находит Between Two Fires — Кристофер Бьюлман (2012)
+        fl_client = BooksClient(api_key="dummy")
+
+        def fake_raw_fl(query: str, max_results: int = 10) -> list[dict[str, Any]]:
+            if "Бюльман" in query:
+                return []
+            return [
+                {
+                    "source": "fantlab",
+                    "fantlab_id": 901,
+                    "title_ru": "Between Two Fires",
+                    "creator": "Кристофер Бьюлман",
+                    "release_year": 2012,
+                    "rating_fantlab": 5.55,
+                },
+                {
+                    "source": "fantlab",
+                    "fantlab_id": 902,
+                    "title_ru": "Между двух огней",
+                    "creator": "Дайан Швемм",
+                    "release_year": 2002,
+                },
+            ]
+
+        with patch.object(fl_client, "_raw_search_fantlab", side_effect=fake_raw_fl):
+            ranked = fl_client.search_candidates("13. Между двумя огнями — Кристофер Бюльман (2012)", limit=3)
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["title_ru"], "Between Two Fires")
+        self.assertEqual(ranked[0]["creator"], "Кристофер Бьюлман")
+
+    @patch("app.pipeline.books.fetch_goodreads_info", return_value={})
+    @patch("app.pipeline.books.fetch_fantlab_info", return_value={"rating_fantlab": 8.1, "summary": "Описание"})
+    def test_web_batch_record_original_and_multiline_books(self, _mock_fl: Any, _mock_gr: Any) -> None:
+        from app.bot.handlers import ingest_web_item
+
+        conn = get_connection(":memory:")
+        apply_migrations(conn)
+        settings.tg_chat_id = -1003531389022
+        settings.allowed_tg_user_id = 349407845
+        settings.topic_books_id = 14
+
+        class MiniBooks:
+            def search_candidates(self, query: str, limit: int = 3) -> list[dict[str, Any]]:
+                q_low = query.lower()
+                if "дерьмо" in q_low:
+                    return [{
+                        "source": "google_books",
+                        "google_books_id": "id_filth",
+                        "title_ru": "Дерьмо",
+                        "creator": "Ирвин Уэлш",
+                        "release_year": 1998,
+                    }]
+                return [{
+                    "source": "google_books",
+                    "google_books_id": "id_iliad",
+                    "title_ru": "Илион",
+                    "creator": "Дэн Симмонс",
+                    "release_year": 2003,
+                }]
+
+        bc = MiniBooks()
+        raw_batch = "1. Дерьмо — Ирвин Уэлш (1998)\n2. Илион — Дэн Симмонс (2003)"
+        r_orig = ingest_web_item(conn, raw_batch, topic="books", record_original_only=True, books_client=bc)  # type: ignore[arg-type]
+        self.assertEqual(r_orig["status"], "original_recorded")
+
+        r1 = ingest_web_item(conn, "Дерьмо — Ирвин Уэлш (1998)", topic="books", skip_original=True, books_client=bc)  # type: ignore[arg-type]
+        r2 = ingest_web_item(conn, "Илион — Дэн Симмонс (2003)", topic="books", skip_original=True, books_client=bc)  # type: ignore[arg-type]
+        self.assertEqual(r1["status"], "created")
+        self.assertEqual(r2["status"], "created")
+        orig_count = conn.execute("SELECT COUNT(*) FROM original_messages").fetchone()[0]
+        self.assertEqual(orig_count, 1)
+
+        # Также проверяем многострочный батч через Telegram _handle_message
+        tg = DummyTG()
+        upd = {
+            "update_id": 3005,
+            "message": {
+                "message_id": 30,
+                "message_thread_id": 14,
+                "chat": {"id": -1003531389022},
+                "from": {"id": 349407845},
+                "text": "1. Дерьмо — Ирвин Уэлш (1998)\n2. Илион — Дэн Симмонс (2003)",
+            },
+        }
+        res_batch = handle_update(conn, upd, tg=tg, books_client=bc)  # type: ignore[arg-type]
+        self.assertEqual(res_batch["status"], "batch_created")
+        self.assertEqual(res_batch["count"], 2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

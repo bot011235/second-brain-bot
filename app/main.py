@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -145,6 +145,8 @@ class PatchItemPayload(BaseModel):
 class CreateItemPayload(BaseModel):
     text: str
     topic: str = "auto"
+    skip_original: bool = False
+    record_original_only: bool = False
 
 
 class BulkItemsPayload(BaseModel):
@@ -361,7 +363,13 @@ def api_create_item(
         raise HTTPException(status_code=400, detail="Empty text")
     conn = get_connection()
     try:
-        res = ingest_web_item(conn, text, topic=payload.topic)
+        res = ingest_web_item(
+            conn,
+            text,
+            topic=payload.topic,
+            skip_original=payload.skip_original,
+            record_original_only=payload.record_original_only,
+        )
         if res.get("item_id"):
             item = repo.get_item(conn, int(res["item_id"]))
             if item:
@@ -432,10 +440,23 @@ def api_delete_item(
         conn.close()
 
 
+def _process_telegram_update_bg(update_payload: dict[str, Any]) -> None:
+    """Обрабатывает Telegram-апдейт в фоне без блокировки HTTP-ответа webhook."""
+    conn = get_connection()
+    try:
+        try:
+            handle_update(conn, update_payload)
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
 @app.post("/webhook/telegram")
 async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     secret = (settings.telegram_webhook_secret or "").strip()
     token = (x_telegram_bot_api_secret_token or "").strip()
@@ -443,14 +464,11 @@ async def telegram_webhook(
         raise HTTPException(status_code=403, detail="Invalid secret token")
 
     update = await request.json()
-    conn = get_connection()
-    try:
-        try:
-            return handle_update(conn, update)
-        except Exception as exc:
-            return {"status": "error", "detail": str(exc)}
-    finally:
-        conn.close()
+    if background_tasks is not None:
+        background_tasks.add_task(_process_telegram_update_bg, update)
+    else:
+        _process_telegram_update_bg(update)
+    return {"status": "accepted"}
 
 
 if TMA_DIR.is_dir():
