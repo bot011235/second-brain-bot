@@ -944,10 +944,10 @@ class TestStage6TMA(unittest.TestCase):
         css = (tma_dir / "styles.css").read_text(encoding="utf-8")
         js = (tma_dir / "app.js").read_text(encoding="utf-8")
 
-        # 1. Версия ассетов v34, PWA-манифест + иконки + Service Worker, Literata
-        self.assertIn("./styles.css?v=34", html)
-        self.assertIn("./app.js?v=34", html)
-        self.assertIn("./manifest.webmanifest?v=34", html)
+        # 1. Версия ассетов v35, PWA-манифест + иконки + Service Worker, Literata
+        self.assertIn("./styles.css?v=35", html)
+        self.assertIn("./app.js?v=35", html)
+        self.assertIn("./manifest.webmanifest?v=35", html)
         self.assertEqual(mimetypes.guess_type("manifest.webmanifest")[0], "application/manifest+json")
         self.assertIn("Literata", html)
         self.assertIn('data-mode="posters"', html)
@@ -957,7 +957,7 @@ class TestStage6TMA(unittest.TestCase):
 
         for fname in ("manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
             self.assertTrue((tma_dir / fname).is_file(), f"Missing PWA asset: {fname}")
-        self.assertIn("notes-shell-v34", (tma_dir / "sw.js").read_text(encoding="utf-8"))
+        self.assertIn("notes-shell-v35", (tma_dir / "sw.js").read_text(encoding="utf-8"))
         self.assertTrue((tma_dir / "icon-192.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertTrue((tma_dir / "icon-512.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         manifest = json.loads((tma_dir / "manifest.webmanifest").read_text(encoding="utf-8"))
@@ -1054,6 +1054,11 @@ class TestStage6TMA(unittest.TestCase):
             "drawer-attention-banner",
             "progress-toggle-head",
             "touch-action: pinch-zoom",
+            "drawer-quick-controls",
+            "drawer-dropdown-btn",
+            "progress-pods-grid",
+            "drawer-extras-bar",
+            "drawer-summary.is-clamped",
         ):
             self.assertIn(token, css)
 
@@ -1120,6 +1125,12 @@ class TestStage6TMA(unittest.TestCase):
             "fetchJsonWithTimeout",
             "record_original_only",
             "skip_original",
+            "drawerStatusTrigger",
+            "drawerRatingTrigger",
+            "buildDrawerNoteHtml",
+            "buildDrawerExtrasBarHtml",
+            "drawerSummaryExpanded",
+            "drawerNoteExpanded",
         ):
             self.assertIn(token, js)
 
