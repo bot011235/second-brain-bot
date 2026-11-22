@@ -135,6 +135,18 @@ class TMDBClient:
             directors = [c.get("name") for c in crew if c.get("job") == "Director" and c.get("name")]
             creator = ", ".join(directors[:2]) if directors else None
 
+        seasons_episodes: dict[str, int] = {}
+        if is_tv:
+            for s in data.get("seasons") or []:
+                if isinstance(s, dict) and s.get("season_number") is not None:
+                    try:
+                        s_num = int(s["season_number"])
+                        ep_cnt = int(s.get("episode_count") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if s_num >= 1 and ep_cnt > 0:
+                        seasons_episodes[str(s_num)] = ep_cnt
+
         poster_path = data.get("poster_path")
         return {
             "tmdb_id": tmdb_id,
@@ -151,4 +163,6 @@ class TMDBClient:
             "wikidata_id": wikidata_id,
             "rating_tmdb": round(float(data["vote_average"]), 1) if data.get("vote_average") else None,
             "seasons_count": int(data["number_of_seasons"]) if is_tv and data.get("number_of_seasons") else None,
+            "episodes_count": int(data["number_of_episodes"]) if is_tv and data.get("number_of_episodes") else None,
+            "seasons_episodes": seasons_episodes or None,
         }

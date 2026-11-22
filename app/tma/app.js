@@ -364,7 +364,9 @@
     externalDrawerItem: null,
     drawerProgressExpanded: false,
     drawerNoteExpanded: false,
+    drawerNoteClampExpanded: false,
     drawerSummaryExpanded: false,
+    drawerTagsExpanded: false,
     drawerEditMode: false,
     drawerAddTagMode: false,
     drawerAddHighlightMode: false,
@@ -1186,6 +1188,7 @@
   const drawerCategoryLabel = document.getElementById("drawerCategoryLabel");
   const drawerPrevBtn = document.getElementById("drawerPrevBtn");
   const drawerNextBtn = document.getElementById("drawerNextBtn");
+  const drawerReenrichHeaderBtn = document.getElementById("drawerReenrichHeaderBtn");
   const drawerLuckyAgainBtn = document.getElementById("drawerLuckyAgainBtn");
   const shortcutsOverlay = document.getElementById("shortcutsOverlay");
   const posterLightbox = document.getElementById("posterLightbox");
@@ -1418,15 +1421,25 @@
   function buildDrawerTagsInnerHtml(item) {
     const genresList = item.genres || [];
     const userTagsList = item.tags || [];
-    const genrePills = genresList
-      .map((g) => `<span class="genre-pill" data-drawer-tag="${escapeHtml(g)}">#${escapeHtml(g)}</span>`)
-      .join("");
-    const userTagPills = userTagsList
-      .map(
+    const tagNodes = [
+      ...genresList.map((g) => `<span class="genre-pill" data-drawer-tag="${escapeHtml(g)}">#${escapeHtml(g)}</span>`),
+      ...userTagsList.map(
         (t) =>
           `<span class="genre-pill" data-drawer-tag="${escapeHtml(t)}">#${escapeHtml(t)}<span class="tag-remove-x" data-remove-tag="${escapeHtml(t)}" title="Удалить тег">×</span></span>`
-      )
-      .join("");
+      ),
+    ];
+
+    let visibleTagsHtml = "";
+    if (tagNodes.length > 6) {
+      if (state.drawerTagsExpanded) {
+        visibleTagsHtml = `${tagNodes.join("")}<button type="button" class="genre-pill drawer-tags-more-pill" data-drawer-tags-expand>Свернуть ▴</button>`;
+      } else {
+        const hiddenCount = tagNodes.length - 5;
+        visibleTagsHtml = `${tagNodes.slice(0, 5).join("")}<button type="button" class="genre-pill drawer-tags-more-pill" data-drawer-tags-expand>+${hiddenCount} ещё</button>`;
+      }
+    } else {
+      visibleTagsHtml = tagNodes.join("");
+    }
 
     const datalistOpts = (state.allTags || [])
       .map((t) => `<option value="${escapeHtml(t.tag)}"></option>`)
@@ -1443,11 +1456,9 @@
       : "";
 
     return `
-      <div class="drawer-section-title">Жанры и теги</div>
       <div class="genres-line">
-        ${genrePills}
-        ${userTagPills}
-        <button type="button" class="genre-pill drawer-add-tag-pill" data-drawer-add-tag-toggle>+ Тег</button>
+        ${visibleTagsHtml}
+        <button type="button" class="genre-pill drawer-add-tag-pill" data-drawer-add-tag-toggle title="Добавить тег" aria-label="Добавить тег">+</button>
       </div>
       ${tagAddFormHtml}
     `;
@@ -1469,14 +1480,13 @@
     }
     const cleanSummary = (item.summary || "").trim();
     if (cleanSummary) {
-      const isLong = cleanSummary.length > 420;
+      const isLong = cleanSummary.length > 340;
       const isClamped = isLong && !state.drawerSummaryExpanded;
       const toggleBtnHtml = isLong
         ? `<button type="button" class="drawer-summary-more-btn" data-drawer-summary-toggle>${isClamped ? "Показать полностью ▾" : "Свернуть ▴"}</button>`
         : "";
       return `
-        <div class="drawer-section">
-          <div class="drawer-section-title">Описание</div>
+        <div class="drawer-summary-block">
           <div class="drawer-summary${isClamped ? " is-clamped" : ""}">${linkifyText(cleanSummary)}</div>
           ${toggleBtnHtml}
         </div>
@@ -1489,32 +1499,35 @@
     if (!item) return "";
     const meta = parseMeta(item.meta);
     const userNote = meta.user_note || "";
-    if (!userNote.trim() && !state.drawerNoteExpanded) return "";
-    return `
-      <div class="drawer-section">
-        <div class="drawer-note-head">
-          <div class="drawer-section-title">✍️ Моя заметка</div>
-          <span class="note-save-state" id="drawerNoteStatus"></span>
+    const trimmed = userNote.trim();
+    if (state.drawerNoteExpanded) {
+      return `
+        <div class="drawer-section drawer-note-editor">
+          <div class="drawer-note-head">
+            <span class="note-save-state" id="drawerNoteStatus">✍️ Личная заметка</span>
+            <button type="button" class="drawer-hl-mini-btn" data-drawer-note-close>Готово</button>
+          </div>
+          <textarea id="drawerNoteInput" class="drawer-note-textarea" rows="3" data-note-item-id="${item.id}" placeholder="Личная заметка, кто посоветовал, мысли...">${escapeHtml(userNote)}</textarea>
         </div>
-        <textarea id="drawerNoteInput" class="drawer-note-textarea" rows="2" data-note-item-id="${item.id}" placeholder="Добавить личную заметку, кто посоветовал, мысли...">${escapeHtml(userNote)}</textarea>
+      `;
+    }
+    if (!trimmed) {
+      return `<button type="button" class="drawer-note-ghost-btn" data-drawer-note-open>✍️ Добавить личную заметку...</button>`;
+    }
+    const isLongNote = trimmed.length > 180 || trimmed.split(/\r?\n/).length > 3;
+    const isClamped = isLongNote && !state.drawerNoteClampExpanded;
+    const clampBtnHtml = isLongNote
+      ? `<button type="button" class="drawer-summary-more-btn" data-drawer-note-clamp-toggle>${isClamped ? "Показать полностью ▾" : "Свернуть ▴"}</button>`
+      : `<span></span>`;
+    return `
+      <div class="drawer-note-card">
+        <div class="drawer-note-text${isClamped ? " is-clamped" : ""}" data-drawer-note-open title="Нажмите, чтобы редактировать">✍️ ${linkifyText(trimmed)}</div>
+        <div class="drawer-note-card-footer">
+          ${clampBtnHtml}
+          <button type="button" class="drawer-hl-mini-btn" data-drawer-note-open>✎ Изменить</button>
+        </div>
       </div>
     `;
-  }
-
-  function buildDrawerExtrasBarHtml(item) {
-    if (!item) return "";
-    const meta = parseMeta(item.meta);
-    const hasNote = Boolean((meta.user_note || "").trim()) || state.drawerNoteExpanded;
-    const hasHls = getItemHighlights(item).length > 0 || state.drawerAddHighlightMode;
-    if (hasNote && hasHls) return "";
-    const btns = [];
-    if (!hasNote) {
-      btns.push(`<button type="button" class="genre-pill drawer-extra-pill" data-drawer-note-open>✍️ + Моя заметка</button>`);
-    }
-    if (!hasHls) {
-      btns.push(`<button type="button" class="genre-pill drawer-extra-pill" data-drawer-hl-toggle>✨ + Цитата</button>`);
-    }
-    return `<div class="drawer-extras-bar">${btns.join("")}</div>`;
   }
 
   function isVideoItem(item) {
@@ -1605,31 +1618,96 @@
     return Array.isArray(meta.highlights) ? meta.highlights.filter((h) => h && (typeof h === "string" || h.text)) : [];
   }
 
+  function computeSeriesProgressInfo(item, metaObj = null) {
+    const meta = metaObj || parseMeta(item ? item.meta : null);
+    const p = meta.progress && meta.progress.kind === "series" ? meta.progress : {};
+    const season = Math.max(1, Number(p.season || 1));
+    const episode = Math.max(0, Number(p.episode || 0));
+    const totalSeasons = Number(p.total_seasons || meta.seasons_count || 0);
+    const seasonsEps = meta.seasons_episodes && typeof meta.seasons_episodes === "object" ? meta.seasons_episodes : null;
+    const curSeasonEps = seasonsEps && Number(seasonsEps[String(season)]) > 0 ? Number(seasonsEps[String(season)]) : 0;
+
+    let pct = 0;
+    if (item && item.status === "done") {
+      pct = 100;
+    } else if (episode === 0 && season <= 1) {
+      pct = 0;
+    } else if (seasonsEps && Object.keys(seasonsEps).length > 0) {
+      let watched = 0;
+      let totalAll = 0;
+      const maxS = Math.max(
+        season,
+        totalSeasons || 0,
+        ...Object.keys(seasonsEps).map((k) => Number(k) || 0)
+      );
+      for (let sIdx = 1; sIdx <= maxS; sIdx += 1) {
+        const epsInS = Number(seasonsEps[String(sIdx)] || 0);
+        totalAll += epsInS;
+        if (sIdx < season) {
+          watched += epsInS;
+        } else if (sIdx === season) {
+          watched += epsInS > 0 ? Math.min(episode, epsInS) : episode;
+        }
+      }
+      const denom = Math.max(totalAll, Number(meta.episodes_count || 0), 1);
+      if (totalSeasons > 0 && season >= totalSeasons && curSeasonEps > 0 && episode >= curSeasonEps) {
+        pct = 100;
+      } else {
+        pct = Math.min(98, Math.max(5, Math.round((watched / denom) * 100)));
+      }
+    } else {
+      const denomSeasons = Math.max(season, totalSeasons || 1);
+      const epFrac = Math.min(0.92, Math.max(0.08, episode / 10));
+      pct = Math.min(96, Math.max(6, Math.round((((season - 1) + epFrac) / denomSeasons) * 100)));
+    }
+
+    return {
+      season,
+      episode,
+      totalSeasons,
+      curSeasonEps,
+      pct,
+      pillLabel: `С${season}·Э${episode}`,
+    };
+  }
+
+  function computeBookProgressInfo(item, metaObj = null) {
+    const meta = metaObj || parseMeta(item ? item.meta : null);
+    const p = meta.progress && meta.progress.kind === "book" ? meta.progress : {};
+    const page = Math.max(0, Number(p.page || 0));
+    const totalPages = Math.max(0, Number(p.total_pages || meta.page_count || 0));
+    let pct =
+      totalPages > 0
+        ? Math.min(100, Math.round((page / totalPages) * 100))
+        : Math.max(0, Math.min(100, Number(p.percent || 0)));
+    if (item && item.status === "done" && pct === 0) pct = 100;
+    const pillLabel = totalPages > 0 ? `${pct}%` : page > 0 ? `стр.${page}` : "0%";
+    const badgeLabel = totalPages > 0 ? `${page} / ${totalPages} стр. (${pct}%)` : page > 0 ? `стр. ${page}` : "Не начато";
+    return { page, totalPages, pct, pillLabel, badgeLabel };
+  }
+
   function getItemProgressSummary(item) {
     if (!item) return null;
     const meta = parseMeta(item.meta);
     const p = meta.progress && typeof meta.progress === "object" ? meta.progress : null;
     if (!p) return null;
     if (item.category === "series" && p.kind === "series") {
-      const season = Math.max(1, Number(p.season || 1));
-      const episode = Math.max(0, Number(p.episode || 0));
-      if (episode === 0 && season <= 1) return null;
-      const totalSeasons = Number(p.total_seasons || meta.seasons_count || 0);
-      const pct = totalSeasons > 0 ? Math.min(100, Math.round((season / totalSeasons) * 100)) : null;
-      const short = `С${season}·Э${episode}`;
-      return { label: `Сезон ${season} · Серия ${episode}`, pct, short };
+      const info = computeSeriesProgressInfo(item, meta);
+      if (info.episode === 0 && info.season <= 1) return null;
+      return {
+        label: `Сезон ${info.season} · Серия ${info.episode}`,
+        pct: info.pct > 0 ? info.pct : null,
+        short: info.pillLabel,
+      };
     }
     if (item.category === "book" && p.kind === "book") {
-      const page = Math.max(0, Number(p.page || 0));
-      const total = Math.max(0, Number(p.total_pages || meta.page_count || 0));
-      const pct =
-        total > 0
-          ? Math.min(100, Math.round((page / total) * 100))
-          : Math.max(0, Math.min(100, Number(p.percent || 0)));
-      if (page === 0 && pct === 0) return null;
-      const label = total > 0 ? `${page} / ${total} стр. (${pct}%)` : `стр. ${page}`;
-      const short = pct > 0 ? `${pct}%` : `стр. ${page}`;
-      return { label, pct: pct > 0 ? pct : null, short };
+      const info = computeBookProgressInfo(item, meta);
+      if (info.page === 0 && info.pct === 0) return null;
+      return {
+        label: info.badgeLabel,
+        pct: info.pct > 0 ? info.pct : null,
+        short: info.pct > 0 ? `${info.pct}%` : `стр. ${info.page}`,
+      };
     }
     if (["article", "post"].includes(item.category) && p.kind === "read") {
       const scrollPct = Math.max(0, Math.min(100, Number(p.scroll_pct || 0)));
@@ -1637,6 +1715,53 @@
       return { label: `Прочитано ${scrollPct}%`, pct: scrollPct, short: `${scrollPct}%` };
     }
     return null;
+  }
+
+  function buildDrawerQuickControlsHtml(item) {
+    if (!item) return "";
+    const meta = parseMeta(item.meta);
+    const activeStatus = item.status || "inbox";
+    const stMeta = STATUS_META[activeStatus] || STATUS_META.inbox;
+    const curRating = Number(item.user_rating || 0);
+    const hasProgress = item.category === "series" || item.category === "book";
+
+    let progBtnHtml = "";
+    if (hasProgress) {
+      const isOpen = Boolean(state.drawerProgressExpanded);
+      const chev = isOpen ? "▴" : "▾";
+      const info =
+        item.category === "series"
+          ? computeSeriesProgressInfo(item, meta)
+          : computeBookProgressInfo(item, meta);
+      progBtnHtml = `
+        <button type="button" class="liquid-pill drawer-dropdown-btn drawer-prog-pill progress-toggle-head${isOpen ? " open" : ""}" data-drawer-progress-toggle aria-expanded="${isOpen ? "true" : "false"}" title="Прогресс">
+          <span class="drawer-prog-pill-top">
+            <span id="drawerBookProgBadge">${escapeHtml(info.pillLabel)}</span>
+            <span class="progress-chevron">${chev}</span>
+          </span>
+          <span class="progress-bar-track"><span class="progress-bar-fill" id="drawerProgPillFill" style="width:${info.pct}%"></span></span>
+        </button>
+      `;
+    }
+
+    return `
+      <div class="drawer-quick-controls${hasProgress ? " has-progress" : ""}">
+        <button type="button" class="liquid-pill liquid-status-btn drawer-status-pill drawer-dropdown-btn" id="drawerStatusTrigger" data-action="status-menu" data-id="${item.id}" aria-haspopup="listbox" aria-expanded="false" aria-label="Статус">
+          <span class="drawer-dd-main">
+            <span class="pill-st-ico" id="drawerStatusIco" style="color:${stMeta.dot};">${stMeta.svg}</span>
+            <span id="drawerStatusLabel">${escapeHtml(stMeta.label)}</span>
+          </span>
+          <span class="pill-st-chev">${UI_ICONS.chevronDown}</span>
+        </button>
+        <button type="button" class="liquid-pill liquid-rating-btn drawer-rate-btn drawer-dropdown-btn ${curRating ? "has-rating" : ""}" id="drawerRatingTrigger" data-action="rating-menu" data-id="${item.id}" aria-haspopup="listbox" aria-expanded="false" aria-label="Моя оценка">
+          <span class="drawer-dd-main">
+            <span class="drawer-rating-value ${curRating ? "has-rating" : ""}" id="drawerRatingValue">${curRating ? `★ ${curRating}` : "☆ Оценка"}</span>
+          </span>
+          <span class="pill-st-chev">${UI_ICONS.chevronDown}</span>
+        </button>
+        ${progBtnHtml}
+      </div>
+    `;
   }
 
   function getZenReadableText(item) {
@@ -1668,119 +1793,61 @@
   }
 
   function buildDrawerProgressHtml(item) {
-    if (!item) return "";
+    if (!item || !state.drawerProgressExpanded) return "";
     const meta = parseMeta(item.meta);
-    const isOpen = Boolean(state.drawerProgressExpanded);
-    const chev = isOpen ? "▴" : "▾";
     if (item.category === "series") {
-      const p = meta.progress && meta.progress.kind === "series" ? meta.progress : {};
-      const season = Math.max(1, Number(p.season || 1));
-      const episode = Math.max(0, Number(p.episode || 0));
-      const totalSeasons = Number(p.total_seasons || meta.seasons_count || 0);
-
-      let pct = 0;
-      if (item.status === "done") {
-        pct = 100;
-      } else if (episode > 0 || season > 1) {
-        const denomSeasons = Math.max(season, totalSeasons || 1);
-        const epFrac = Math.min(0.92, Math.max(0.08, episode / 10));
-        pct = Math.min(96, Math.max(6, Math.round((((season - 1) + epFrac) / denomSeasons) * 100)));
-      }
-
-      const seasonTotalSuffix = totalSeasons > 0 ? `<span class="prog-stat-muted">/${totalSeasons}</span>` : "";
-      const bodyHtml = isOpen
-        ? `
-          <div class="progress-card-body">
-            <div class="progress-pods-grid progress-stepper-row">
-              <div class="progress-pod">
-                <span class="progress-pod-label">Сезон</span>
-                <div class="progress-pod-controls">
-                  <button type="button" class="progress-pod-btn" data-prog-season-delta="-1" data-id="${item.id}" title="Предыдущий сезон" aria-label="Предыдущий сезон">−</button>
-                  <input type="number" class="progress-num-input" data-prog-series-input="season" data-id="${item.id}" min="1" max="999" value="${season}" aria-label="Сезон" />
-                  <button type="button" class="progress-pod-btn" data-prog-season-delta="1" data-id="${item.id}" title="Следующий сезон" aria-label="Следующий сезон">+</button>
-                </div>
+      const info = computeSeriesProgressInfo(item, meta);
+      const totalSeasonsHint = info.totalSeasons > 0 ? `<span class="prog-stat-muted">/${info.totalSeasons}</span>` : "";
+      const epTotalHint = info.curSeasonEps > 0 ? `<span class="prog-stat-muted">/${info.curSeasonEps}</span>` : "";
+      return `
+        <div class="drawer-section drawer-progress-card">
+          <div class="progress-pods-grid progress-stepper-row">
+            <div class="progress-pod">
+              <span class="progress-pod-label">Сезон${totalSeasonsHint}</span>
+              <div class="progress-pod-controls">
+                <button type="button" class="progress-pod-btn" data-prog-season-delta="-1" data-id="${item.id}" title="Предыдущий сезон" aria-label="Предыдущий сезон">−</button>
+                <input type="number" class="progress-num-input" data-prog-series-input="season" data-id="${item.id}" min="1" max="999" value="${info.season}" aria-label="Сезон" />
+                <button type="button" class="progress-pod-btn" data-prog-season-delta="1" data-id="${item.id}" title="Следующий сезон" aria-label="Следующий сезон">+</button>
               </div>
-              <div class="progress-pod">
-                <span class="progress-pod-label">Эпизод</span>
-                <div class="progress-pod-controls">
-                  <button type="button" class="progress-pod-btn" data-prog-series-delta="-1" data-id="${item.id}" title="Предыдущая серия" aria-label="Предыдущая серия">−</button>
-                  <input type="number" class="progress-num-input" data-prog-series-input="episode" data-id="${item.id}" min="0" max="9999" value="${episode}" aria-label="Эпизод" />
-                  <button type="button" class="progress-pod-btn primary" data-prog-series-delta="1" data-id="${item.id}" title="Следующая серия">+1</button>
-                </div>
+            </div>
+            <div class="progress-pod">
+              <span class="progress-pod-label">Эпизод${epTotalHint}</span>
+              <div class="progress-pod-controls">
+                <button type="button" class="progress-pod-btn" data-prog-series-delta="-1" data-id="${item.id}" title="Предыдущая серия" aria-label="Предыдущая серия">−</button>
+                <input type="number" class="progress-num-input" data-prog-series-input="episode" data-id="${item.id}" min="0" max="9999" value="${info.episode}" aria-label="Эпизод" />
+                <button type="button" class="progress-pod-btn primary" data-prog-series-delta="1" data-id="${item.id}" title="Следующая серия">+1</button>
               </div>
             </div>
           </div>
-        `
-        : "";
-      return `
-        <div class="drawer-section drawer-progress-card${isOpen ? "" : " is-collapsed"}">
-          <button type="button" class="progress-toggle-head" data-drawer-progress-toggle aria-expanded="${isOpen ? "true" : "false"}">
-            <span class="drawer-section-title">📺 Прогресс</span>
-            <span class="progress-head-right">
-              <span class="progress-stat-chip">Сезон <b>${season}</b>${seasonTotalSuffix}</span>
-              <span class="progress-stat-chip accent">Эпизод <b>${episode}</b></span>
-              <span class="progress-chevron">${chev}</span>
-            </span>
-          </button>
-          <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
-          ${bodyHtml}
         </div>
       `;
     }
     if (item.category === "book") {
-      const p = meta.progress && meta.progress.kind === "book" ? meta.progress : {};
-      const page = Math.max(0, Number(p.page || 0));
-      const totalPages = Math.max(0, Number(p.total_pages || meta.page_count || 0));
-      let pct =
-        totalPages > 0
-          ? Math.min(100, Math.round((page / totalPages) * 100))
-          : Math.max(0, Math.min(100, Number(p.percent || 0)));
-      if (item.status === "done" && pct === 0) pct = 100;
-      const badgeText =
-        totalPages > 0
-          ? `${page} / ${totalPages} стр. · ${pct}%`
-          : page > 0
-          ? `стр. ${page}`
-          : "Не начато";
+      const info = computeBookProgressInfo(item, meta);
       const sliderHtml =
-        totalPages > 0
-          ? `<input type="range" class="progress-slider" data-prog-book-slider="${item.id}" min="0" max="${totalPages}" value="${Math.min(page, totalPages)}" aria-label="Прогресс чтения в страницах" />`
+        info.totalPages > 0
+          ? `<input type="range" class="progress-slider" data-prog-book-slider="${item.id}" min="0" max="${info.totalPages}" value="${Math.min(info.page, info.totalPages)}" aria-label="Прогресс чтения в страницах" />`
           : "";
       const doneBtnHtml =
-        totalPages > 0 && page >= totalPages && item.status !== "done"
+        info.totalPages > 0 && info.page >= info.totalPages && item.status !== "done"
           ? `<button type="button" class="progress-done-hint" data-prog-book-done="${item.id}">✅ Отметить «Готово»</button>`
           : "";
-      const bodyHtml = isOpen
-        ? `
-          <div class="progress-card-body">
-            ${sliderHtml}
-            <div class="progress-book-row progress-stepper-row">
-              <div class="progress-book-inputs">
-                <label class="progress-num-group">Стр. <input type="number" class="progress-num-input" data-prog-book-input="page" data-id="${item.id}" min="0" max="99999" value="${page}" /></label>
-                <span class="prog-stat-muted">/</span>
-                <label class="progress-num-group"><input type="number" class="progress-num-input" data-prog-book-input="total_pages" data-id="${item.id}" min="0" max="99999" value="${totalPages || ""}" placeholder="всего" /></label>
-              </div>
-              <div class="progress-book-btns">
-                <button type="button" class="progress-pod-btn" data-prog-book-delta="-10" data-id="${item.id}" title="Назад 10 стр.">−10</button>
-                <button type="button" class="progress-pod-btn primary" data-prog-book-delta="10" data-id="${item.id}">+10</button>
-                <button type="button" class="progress-pod-btn" data-prog-book-delta="25" data-id="${item.id}">+25</button>
-              </div>
-            </div>
-            ${doneBtnHtml}
-          </div>
-        `
-        : "";
       return `
-        <div class="drawer-section drawer-progress-card${isOpen ? "" : " is-collapsed"}">
-          <button type="button" class="progress-toggle-head" data-drawer-progress-toggle aria-expanded="${isOpen ? "true" : "false"}">
-            <span class="drawer-section-title">📖 Прогресс</span>
-            <span class="progress-head-right">
-              <span class="progress-badge-lg" id="drawerBookProgBadge">${escapeHtml(badgeText)}</span>
-              <span class="progress-chevron">${chev}</span>
-            </span>
-          </button>
-          <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
-          ${bodyHtml}
+        <div class="drawer-section drawer-progress-card">
+          ${sliderHtml}
+          <div class="progress-book-row progress-stepper-row">
+            <div class="progress-book-inputs">
+              <label class="progress-num-group">Стр. <input type="number" class="progress-num-input" data-prog-book-input="page" data-id="${item.id}" min="0" max="99999" value="${info.page}" /></label>
+              <span class="prog-stat-muted">/</span>
+              <label class="progress-num-group"><input type="number" class="progress-num-input" data-prog-book-input="total_pages" data-id="${item.id}" min="0" max="99999" value="${info.totalPages || ""}" placeholder="всего" /></label>
+            </div>
+            <div class="progress-book-btns">
+              <button type="button" class="progress-pod-btn" data-prog-book-delta="-10" data-id="${item.id}" title="Назад 10 стр.">−10</button>
+              <button type="button" class="progress-pod-btn primary" data-prog-book-delta="10" data-id="${item.id}">+10</button>
+              <button type="button" class="progress-pod-btn" data-prog-book-delta="25" data-id="${item.id}">+25</button>
+            </div>
+          </div>
+          ${doneBtnHtml}
         </div>
       `;
     }
@@ -1812,22 +1879,23 @@
     const addFormHtml = state.drawerAddHighlightMode
       ? `
         <div class="zen-manual-quote-box">
-          <textarea id="drawerNewHighlightInput" class="drawer-note-textarea" rows="3" placeholder="Вставьте важную цитату или тезис..."></textarea>
-          <input type="text" id="drawerNewHighlightNoteInput" class="drawer-edit-input" placeholder="Короткий комментарий (необязательно)" />
+          <textarea id="drawerNewHighlightInput" class="drawer-note-textarea" rows="2" placeholder="Вставьте важную цитату или тезис..."></textarea>
+          <input type="text" id="drawerNewHighlightNoteInput" class="drawer-edit-input" placeholder="Комментарий (необязательно)" />
           <div class="drawer-note-footer">
             <button type="button" class="confirm-cancel-btn" data-drawer-hl-cancel>Отмена</button>
-            <button type="button" class="liquid-pill drawer-save-note-btn" data-drawer-hl-submit="${item.id}">Сохранить цитату</button>
+            <button type="button" class="liquid-pill drawer-save-note-btn" data-drawer-hl-submit="${item.id}">Сохранить</button>
           </div>
         </div>
       `
       : "";
 
+    const headerHtml = hls.length
+      ? `<div class="drawer-section-title">✨ Цитаты (${hls.length})</div>`
+      : "";
+
     return `
-      <div class="drawer-section">
-        <div class="progress-header-row">
-          <div class="drawer-section-title">✨ Цитаты и хайлайты${hls.length ? ` (${hls.length})` : ""}</div>
-          <button type="button" class="genre-pill drawer-add-tag-pill" data-drawer-hl-toggle>+ Цитата</button>
-        </div>
+      <div class="drawer-section drawer-highlights-box">
+        ${headerHtml}
         ${addFormHtml}
         ${hls.length ? `<div class="drawer-highlights-list">${cardsHtml}</div>` : ""}
       </div>
@@ -1863,10 +1931,9 @@
   }
 
   function buildDrawerActionsFooterHtml(item) {
-    const isBusy = Number(state.reenrichingItemId) === Number(item.id);
-    const reenrichHtml = `<button type="button" class="drawer-reenrich-btn${isBusy ? " is-loading" : ""}" data-drawer-reenrich="${item.id}"${isBusy ? " disabled" : ""} title="Повторно подтянуть постер, рейтинги, описание и текст"><span class="reenrich-ico">🔄</span><span>${isBusy ? "Обновляю..." : "Переобогатить"}</span></button>`;
+    const quoteBtnHtml = `<button type="button" class="drawer-reenrich-btn drawer-quote-action-btn" data-drawer-hl-toggle><span>✨ + Цитата</span></button>`;
     const deleteFooterHtml = `<button type="button" class="drawer-delete-btn" data-drawer-delete="${item.id}" title="Удалить запись">${UI_ICONS.trash}<span>Удалить</span></button>`;
-    return `${reenrichHtml}${deleteFooterHtml}`;
+    return `${quoteBtnHtml}${deleteFooterHtml}`;
   }
 
   async function startInboxTriage() {
@@ -1977,7 +2044,7 @@
 
     const ratingValEl = document.getElementById("drawerRatingValue");
     if (ratingValEl) {
-      ratingValEl.textContent = curRating ? `★ ${curRating} / 10` : "☆ Без оценки";
+      ratingValEl.textContent = curRating ? `★ ${curRating}` : "☆ Оценка";
       ratingValEl.classList.toggle("has-rating", Boolean(curRating));
     }
 
@@ -1992,6 +2059,8 @@
     }
 
     if (opts.syncProgress) {
+      const quickSlot = document.getElementById("drawerQuickControlsSlot");
+      if (quickSlot) quickSlot.innerHTML = buildDrawerQuickControlsHtml(item);
       const progSlot = document.getElementById("drawerProgressSlot");
       if (progSlot) progSlot.innerHTML = buildDrawerProgressHtml(item);
     }
@@ -1999,8 +2068,6 @@
     if (opts.syncHighlights) {
       const hlSlot = document.getElementById("drawerHighlightsSlot");
       if (hlSlot) hlSlot.innerHTML = buildDrawerHighlightsHtml(item);
-      const extrasSlot = document.getElementById("drawerExtrasBarSlot");
-      if (extrasSlot) extrasSlot.innerHTML = buildDrawerExtrasBarHtml(item);
     }
 
     if (opts.syncReader) {
@@ -2023,6 +2090,7 @@
       drawerBody.innerHTML = "";
       delete drawerBody.dataset.renderedItemId;
       if (drawerLuckyAgainBtn) drawerLuckyAgainBtn.classList.add("hidden");
+      if (drawerReenrichHeaderBtn) drawerReenrichHeaderBtn.classList.add("hidden");
       syncTelegramBackButton();
       return;
     }
@@ -2032,6 +2100,7 @@
       if (drawerPrevBtn) drawerPrevBtn.disabled = true;
       if (drawerNextBtn) drawerNextBtn.disabled = true;
       if (drawerLuckyAgainBtn) drawerLuckyAgainBtn.classList.add("hidden");
+      if (drawerReenrichHeaderBtn) drawerReenrichHeaderBtn.classList.add("hidden");
       delete drawerBody.dataset.renderedItemId;
       drawerBody.innerHTML = `
         <div class="triage-done-card">
@@ -2058,6 +2127,12 @@
     if (drawerNextBtn) drawerNextBtn.disabled = idx === -1 || idx >= state.items.length - 1;
     if (drawerLuckyAgainBtn) {
       drawerLuckyAgainBtn.classList.toggle("hidden", !(state.luckyMode && !state.triageMode));
+    }
+    if (drawerReenrichHeaderBtn) {
+      const isBusyReenrich = Number(state.reenrichingItemId) === Number(item.id);
+      drawerReenrichHeaderBtn.classList.remove("hidden");
+      drawerReenrichHeaderBtn.classList.toggle("is-loading", isBusyReenrich);
+      drawerReenrichHeaderBtn.disabled = isBusyReenrich;
     }
 
     const emoji = CATEGORY_EMOJI[item.category] || "📌";
@@ -2099,7 +2174,7 @@
 
     const ratingsHtml = buildRatingsHtml(item, { compact: false, includeSources: true });
 
-    const tagsHtml = `<div class="drawer-section" id="drawerTagsSection">${buildDrawerTagsInnerHtml(item)}</div>`;
+    const tagsHtml = `<div class="drawer-tags-block" id="drawerTagsSection">${buildDrawerTagsInnerHtml(item)}</div>`;
     const summaryEditHtml = `<div id="drawerSummarySlot">${buildDrawerSummaryInnerHtml(item)}</div>`;
     const noteSectionHtml = `<div id="drawerNoteSlot">${buildDrawerNoteHtml(item)}</div>`;
 
@@ -2122,29 +2197,6 @@
       : "";
 
     const readerHtml = `<div id="drawerReaderSlot">${buildDrawerReaderHtml(item)}</div>`;
-
-    const activeStatus = item.status || "inbox";
-    const stMeta = STATUS_META[activeStatus] || STATUS_META.inbox;
-    const curRating = Number(item.user_rating || 0);
-    const quickControlsHtml = `
-      <div class="drawer-quick-controls">
-        <button type="button" class="liquid-pill liquid-status-btn drawer-status-pill drawer-dropdown-btn" id="drawerStatusTrigger" data-action="status-menu" data-id="${item.id}" aria-haspopup="listbox" aria-expanded="false" aria-label="Статус">
-          <span class="drawer-dd-meta">Статус</span>
-          <span class="drawer-dd-main">
-            <span class="pill-st-ico" id="drawerStatusIco" style="color:${stMeta.dot};">${stMeta.svg}</span>
-            <span id="drawerStatusLabel">${escapeHtml(stMeta.label)}</span>
-          </span>
-          <span class="pill-st-chev">${UI_ICONS.chevronDown}</span>
-        </button>
-        <button type="button" class="liquid-pill liquid-rating-btn drawer-rate-btn drawer-dropdown-btn ${curRating ? "has-rating" : ""}" id="drawerRatingTrigger" data-action="rating-menu" data-id="${item.id}" aria-haspopup="listbox" aria-expanded="false" aria-label="Моя оценка">
-          <span class="drawer-dd-meta">Моя оценка</span>
-          <span class="drawer-dd-main">
-            <span class="drawer-rating-value ${curRating ? "has-rating" : ""}" id="drawerRatingValue">${curRating ? `★ ${curRating} / 10` : "☆ Без оценки"}</span>
-          </span>
-          <span class="pill-st-chev">${UI_ICONS.chevronDown}</span>
-        </button>
-      </div>
-    `;
 
     const triageBannerHtml = state.triageMode
       ? (() => {
@@ -2173,9 +2225,9 @@
       : "";
 
     const attentionBannerHtml = buildDrawerAttentionBannerHtml(item);
+    const quickControlsSlotHtml = `<div id="drawerQuickControlsSlot">${buildDrawerQuickControlsHtml(item)}</div>`;
     const progressSlotHtml = `<div id="drawerProgressSlot">${buildDrawerProgressHtml(item)}</div>`;
     const highlightsSlotHtml = `<div id="drawerHighlightsSlot">${buildDrawerHighlightsHtml(item)}</div>`;
-    const extrasBarSlotHtml = `<div id="drawerExtrasBarSlot">${buildDrawerExtrasBarHtml(item)}</div>`;
 
     drawerBody.dataset.renderedItemId = String(item.id);
     drawerBody.innerHTML = `
@@ -2195,18 +2247,19 @@
       </div>
 
       ${ratingsHtml ? `<div class="ratings-bar">${ratingsHtml}</div>` : ""}
-      ${quickControlsHtml}
+      ${quickControlsSlotHtml}
       ${progressSlotHtml}
       ${ytSectionHtml}
+      ${tagsHtml}
       ${summaryEditHtml}
       ${readerHtml}
-      ${tagsHtml}
-      ${noteSectionHtml}
-      ${highlightsSlotHtml}
-      ${extrasBarSlotHtml}
 
-      <div class="drawer-actions-footer" id="drawerActionsFooter">
-        ${buildDrawerActionsFooterHtml(item)}
+      <div class="drawer-bottom-stack">
+        ${noteSectionHtml}
+        ${highlightsSlotHtml}
+        <div class="drawer-actions-footer" id="drawerActionsFooter">
+          ${buildDrawerActionsFooterHtml(item)}
+        </div>
       </div>
     `;
 
@@ -2318,7 +2371,9 @@
     state.drawerItemId = numId;
     state.drawerProgressExpanded = false;
     state.drawerNoteExpanded = false;
+    state.drawerNoteClampExpanded = false;
     state.drawerSummaryExpanded = false;
+    state.drawerTagsExpanded = false;
     state.drawerEditMode = false;
     state.drawerAddTagMode = false;
     state.drawerAddHighlightMode = false;
@@ -2397,7 +2452,9 @@
     state.externalDrawerItem = null;
     state.drawerProgressExpanded = false;
     state.drawerNoteExpanded = false;
+    state.drawerNoteClampExpanded = false;
     state.drawerSummaryExpanded = false;
+    state.drawerTagsExpanded = false;
     state.drawerEditMode = false;
     state.drawerAddTagMode = false;
     state.drawerAddHighlightMode = false;
@@ -2443,6 +2500,13 @@
   }
   if (drawerPrevBtn) drawerPrevBtn.addEventListener("click", () => navigateDrawer(-1));
   if (drawerNextBtn) drawerNextBtn.addEventListener("click", () => navigateDrawer(1));
+  if (drawerReenrichHeaderBtn) {
+    drawerReenrichHeaderBtn.addEventListener("click", () => {
+      if (state.drawerItemId !== null) {
+        reenrichItemInDrawer(state.drawerItemId);
+      }
+    });
+  }
   drawerOverlay.addEventListener("click", (e) => {
     if (e.target === drawerOverlay) closeDetailDrawer();
   });
@@ -2482,7 +2546,9 @@
       const maxVal = Math.max(0, Number(e.target.max || 0));
       const pct = maxVal > 0 ? Math.min(100, Math.round((pageVal / maxVal) * 100)) : 0;
       const badge = document.getElementById("drawerBookProgBadge");
-      if (badge && maxVal > 0) badge.textContent = `${pageVal} / ${maxVal} стр. · ${pct}%`;
+      if (badge && maxVal > 0) badge.textContent = `${pct}%`;
+      const fill = document.getElementById("drawerProgPillFill");
+      if (fill && maxVal > 0) fill.style.width = `${pct}%`;
       const pageInp = drawerBody.querySelector('[data-prog-book-input="page"]');
       if (pageInp) pageInp.value = String(pageVal);
     }
@@ -2573,6 +2639,17 @@
       return;
     }
 
+    if (e.target.closest("[data-drawer-tags-expand]")) {
+      state.drawerTagsExpanded = !state.drawerTagsExpanded;
+      const item = findDrawerItem(state.drawerItemId);
+      const tagsSection = document.getElementById("drawerTagsSection");
+      if (item && tagsSection) {
+        tagsSection.innerHTML = buildDrawerTagsInnerHtml(item);
+      }
+      haptic("selection");
+      return;
+    }
+
     if (e.target.closest("[data-drawer-summary-toggle]")) {
       state.drawerSummaryExpanded = !state.drawerSummaryExpanded;
       const item = findDrawerItem(state.drawerItemId);
@@ -2584,16 +2661,23 @@
       return;
     }
 
+    if (e.target.closest("[data-drawer-note-clamp-toggle]")) {
+      state.drawerNoteClampExpanded = !state.drawerNoteClampExpanded;
+      const item = findDrawerItem(state.drawerItemId);
+      const noteSlot = document.getElementById("drawerNoteSlot");
+      if (item && noteSlot) {
+        noteSlot.innerHTML = buildDrawerNoteHtml(item);
+      }
+      haptic("selection");
+      return;
+    }
+
     if (e.target.closest("[data-drawer-note-open]")) {
       state.drawerNoteExpanded = true;
       const item = findDrawerItem(state.drawerItemId);
       const noteSlot = document.getElementById("drawerNoteSlot");
-      const extrasSlot = document.getElementById("drawerExtrasBarSlot");
       if (item && noteSlot) {
         noteSlot.innerHTML = buildDrawerNoteHtml(item);
-      }
-      if (item && extrasSlot) {
-        extrasSlot.innerHTML = buildDrawerExtrasBarHtml(item);
       }
       setTimeout(() => {
         const inp = document.getElementById("drawerNoteInput");
@@ -2603,9 +2687,25 @@
       return;
     }
 
+    if (e.target.closest("[data-drawer-note-close]")) {
+      await flushPendingNoteSave();
+      state.drawerNoteExpanded = false;
+      const item = findDrawerItem(state.drawerItemId);
+      const noteSlot = document.getElementById("drawerNoteSlot");
+      if (item && noteSlot) {
+        noteSlot.innerHTML = buildDrawerNoteHtml(item);
+      }
+      haptic("selection");
+      return;
+    }
+
     if (e.target.closest("[data-drawer-progress-toggle]")) {
       state.drawerProgressExpanded = !state.drawerProgressExpanded;
       const item = findDrawerItem(state.drawerItemId);
+      const quickSlot = document.getElementById("drawerQuickControlsSlot");
+      if (item && quickSlot) {
+        quickSlot.innerHTML = buildDrawerQuickControlsHtml(item);
+      }
       const progSlot = document.getElementById("drawerProgressSlot");
       if (item && progSlot) {
         progSlot.innerHTML = buildDrawerProgressHtml(item);
@@ -2700,14 +2800,10 @@
       state.drawerAddHighlightMode = !state.drawerAddHighlightMode;
       const item = findDrawerItem(state.drawerItemId);
       const hlSlot = document.getElementById("drawerHighlightsSlot");
-      const extrasSlot = document.getElementById("drawerExtrasBarSlot");
       if (item && hlSlot) {
         hlSlot.innerHTML = buildDrawerHighlightsHtml(item);
       } else {
         renderDetailDrawer();
-      }
-      if (item && extrasSlot) {
-        extrasSlot.innerHTML = buildDrawerExtrasBarHtml(item);
       }
       if (state.drawerAddHighlightMode) {
         setTimeout(() => {
@@ -2722,9 +2818,7 @@
       state.drawerAddHighlightMode = false;
       const item = findDrawerItem(state.drawerItemId);
       const hlSlot = document.getElementById("drawerHighlightsSlot");
-      const extrasSlot = document.getElementById("drawerExtrasBarSlot");
       if (item && hlSlot) hlSlot.innerHTML = buildDrawerHighlightsHtml(item);
-      if (item && extrasSlot) extrasSlot.innerHTML = buildDrawerExtrasBarHtml(item);
       return;
     }
 

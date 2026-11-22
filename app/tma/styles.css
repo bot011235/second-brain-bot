@@ -2354,6 +2354,26 @@ html[data-theme="dark"] .cat-post { --cat-accent-color: #facc15; }
   color: var(--muted);
 }
 
+.drawer-tags-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.genre-pill.drawer-tags-more-pill {
+  color: var(--accent);
+  background: var(--surface);
+  border-style: dashed;
+  border-color: var(--border-strong);
+  font-weight: 600;
+}
+
+.drawer-summary-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
 .drawer-summary {
   font-size: 14px;
   line-height: 1.56;
@@ -2363,7 +2383,7 @@ html[data-theme="dark"] .cat-post { --cat-accent-color: #facc15; }
 
 .drawer-summary.is-clamped {
   display: -webkit-box;
-  -webkit-line-clamp: 5;
+  -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -2381,6 +2401,74 @@ html[data-theme="dark"] .cat-post { --cat-accent-color: #facc15; }
 
 .drawer-summary-more-btn:hover {
   text-decoration: underline;
+}
+
+.drawer-header-reenrich-btn.is-loading svg {
+  animation: spinReenrich 0.8s linear infinite;
+}
+
+.drawer-bottom-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.drawer-note-ghost-btn {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 11px;
+  border: 1px dashed var(--border-strong);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.14s ease, color 0.14s ease;
+}
+
+.drawer-note-ghost-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.drawer-note-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.drawer-note-text {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: pointer;
+}
+
+.drawer-note-text.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.drawer-note-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.drawer-note-editor {
+  gap: 6px;
 }
 
 .drawer-controls-grid {
@@ -2410,12 +2498,40 @@ html[data-theme="dark"] .cat-post { --cat-accent-color: #facc15; }
 }
 
 .drawer-actions-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding-top: 4px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-top: 0;
+}
+
+.drawer-actions-footer .drawer-quote-action-btn,
+.drawer-actions-footer .drawer-delete-btn {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 11px;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.drawer-actions-footer .drawer-quote-action-btn {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.drawer-actions-footer .drawer-quote-action-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.drawer-actions-footer .drawer-delete-btn {
+  background: var(--surface);
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  color: var(--danger);
 }
 
 .drawer-link-btn {
@@ -3023,27 +3139,29 @@ html[data-theme="dark"] .cat-post { --cat-accent-color: #facc15; }
 .drawer-quick-controls {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 6px;
+}
+
+.drawer-quick-controls.has-progress {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .drawer-quick-controls .liquid-pill.drawer-dropdown-btn {
   width: 100%;
   height: auto;
-  min-height: 46px;
-  padding: 7px 12px;
-  border-radius: 12px;
+  min-height: 38px;
+  padding: 6px 9px;
+  border-radius: 11px;
   background: var(--surface);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
-  column-gap: 6px;
-  row-gap: 3px;
+  display: flex;
   align-items: center;
-  justify-items: start;
+  justify-content: space-between;
+  gap: 4px;
   text-align: left;
   cursor: pointer;
+  min-width: 0;
 }
 
 .drawer-quick-controls .liquid-pill.drawer-dropdown-btn:hover {
@@ -3060,43 +3178,28 @@ html[data-theme="dark"] .cat-post { --cat-accent-color: #facc15; }
   border-color: rgba(194, 65, 12, 0.3);
 }
 
-.drawer-dd-meta {
-  grid-column: 1;
-  grid-row: 1;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  line-height: 1.1;
-}
-
 .drawer-dd-main {
-  grid-column: 1;
-  grid-row: 2;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13.5px;
+  gap: 5px;
+  font-size: 12.5px;
   font-weight: 700;
   color: var(--text);
   min-width: 0;
-  max-width: 100%;
+  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .drawer-quick-controls .drawer-dropdown-btn .pill-st-chev {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  align-self: center;
   color: var(--muted);
   display: inline-flex;
+  flex-shrink: 0;
 }
 
 .drawer-quick-controls .drawer-rating-value {
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-weight: 700;
   color: var(--text-secondary);
 }
@@ -3105,24 +3208,33 @@ html[data-theme="dark"] .cat-post { --cat-accent-color: #facc15; }
   color: var(--accent);
 }
 
-.drawer-extras-bar {
+.drawer-quick-controls .liquid-pill.drawer-prog-pill {
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  gap: 4px;
+  padding: 5px 9px;
+}
+
+.drawer-prog-pill-top {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  line-height: 1.1;
 }
 
-.drawer-extra-pill {
-  background: var(--surface);
-  border-style: dashed;
-  border-color: var(--border-strong);
-  font-weight: 600;
-  padding: 5px 10px;
-  border-radius: 999px;
+.drawer-prog-pill .progress-bar-track {
+  height: 3.5px;
+  margin: 0;
 }
 
-.drawer-extra-pill:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+.drawer-highlights-box {
+  gap: 8px;
 }
 
 .drawer-status-pills {
@@ -4788,7 +4900,8 @@ html.is-tma.is-tma-fullscreen .zen-reader-topbar {
 }
 
 .drawer-progress-card {
-  gap: 9px;
+  padding: 9px 10px;
+  gap: 8px;
 }
 
 .drawer-progress-card.is-collapsed {

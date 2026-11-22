@@ -944,10 +944,10 @@ class TestStage6TMA(unittest.TestCase):
         css = (tma_dir / "styles.css").read_text(encoding="utf-8")
         js = (tma_dir / "app.js").read_text(encoding="utf-8")
 
-        # 1. Версия ассетов v35, PWA-манифест + иконки + Service Worker, Literata
-        self.assertIn("./styles.css?v=35", html)
-        self.assertIn("./app.js?v=35", html)
-        self.assertIn("./manifest.webmanifest?v=35", html)
+        # 1. Версия ассетов v36, PWA-манифест + иконки + Service Worker, Literata
+        self.assertIn("./styles.css?v=36", html)
+        self.assertIn("./app.js?v=36", html)
+        self.assertIn("./manifest.webmanifest?v=36", html)
         self.assertEqual(mimetypes.guess_type("manifest.webmanifest")[0], "application/manifest+json")
         self.assertIn("Literata", html)
         self.assertIn('data-mode="posters"', html)
@@ -957,7 +957,7 @@ class TestStage6TMA(unittest.TestCase):
 
         for fname in ("manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
             self.assertTrue((tma_dir / fname).is_file(), f"Missing PWA asset: {fname}")
-        self.assertIn("notes-shell-v35", (tma_dir / "sw.js").read_text(encoding="utf-8"))
+        self.assertIn("notes-shell-v36", (tma_dir / "sw.js").read_text(encoding="utf-8"))
         self.assertTrue((tma_dir / "icon-192.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertTrue((tma_dir / "icon-512.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         manifest = json.loads((tma_dir / "manifest.webmanifest").read_text(encoding="utf-8"))
@@ -1057,7 +1057,8 @@ class TestStage6TMA(unittest.TestCase):
             "drawer-quick-controls",
             "drawer-dropdown-btn",
             "progress-pods-grid",
-            "drawer-extras-bar",
+            "drawer-bottom-stack",
+            "drawer-note-card",
             "drawer-summary.is-clamped",
         ):
             self.assertIn(token, css)
@@ -1127,8 +1128,12 @@ class TestStage6TMA(unittest.TestCase):
             "skip_original",
             "drawerStatusTrigger",
             "drawerRatingTrigger",
+            "drawerReenrichHeaderBtn",
+            "buildDrawerQuickControlsHtml",
+            "computeSeriesProgressInfo",
             "buildDrawerNoteHtml",
-            "buildDrawerExtrasBarHtml",
+            "drawerTagsExpanded",
+            "drawerNoteClampExpanded",
             "drawerSummaryExpanded",
             "drawerNoteExpanded",
         ):
