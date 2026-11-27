@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Notes</title>
-  <link rel="manifest" href="./manifest.webmanifest?v=36" />
+  <link rel="manifest" href="./manifest.webmanifest?v=37" />
   <meta name="theme-color" content="#fbf8f3" id="metaThemeColor" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,600..700;1,7..72,400&display=swap" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=36" />
+  <link rel="stylesheet" href="./styles.css?v=37" />
 </head>
 <body>
   <div class="app-shell">
@@ -142,17 +142,8 @@
             </div>
           </div>
           <div class="mobile-header-actions">
-            <button type="button" class="icon-btn accent-icon-btn" id="openAddModalMobile" title="Добавить запись" aria-label="Добавить запись">
-              <span class="nav-ico" data-icon="plus"></span>
-            </button>
             <button type="button" class="icon-btn" id="viewModeSwitchMobile" title="Вид: Список (нажмите для смены)" aria-label="Сменить вид отображения">
               <span class="nav-ico" id="viewModeIconMobile" data-icon="list"></span>
-            </button>
-            <button type="button" class="icon-btn" id="refreshBtnMobile" title="Обновить" aria-label="Обновить">
-              <span class="nav-ico" data-icon="refresh"></span>
-            </button>
-            <button type="button" class="icon-btn danger" id="logoutBtnMobile" title="Выйти" aria-label="Выйти">
-              <span class="nav-ico" data-icon="logout"></span>
             </button>
           </div>
         </div>
@@ -229,6 +220,7 @@
 
       <main class="catalog-container" id="catalogContainer">
         <div id="activeSmartBanner" class="active-smart-banner hidden"></div>
+        <div id="activeFiltersBar" class="active-filters-bar hidden" aria-label="Активные фильтры"></div>
         <div class="status-pills-bar" id="statusPillsBar" aria-label="Быстрый фильтр по статусам"></div>
         <div id="catalogGrid" class="catalog-list view-list"></div>
         <div id="loadMoreBar" class="load-more-bar hidden">
@@ -254,18 +246,18 @@
       <span class="nav-ico" data-icon="chart"></span>
       <span>Итоги</span>
     </button>
-    <button type="button" class="bottom-btn" data-view="originals">
-      <span class="nav-ico" data-icon="inbox"></span>
-      <span>Оригиналы</span>
+    <button type="button" class="bottom-btn bottom-add-btn" id="openAddModalMobile" aria-label="Добавить запись">
+      <span class="bottom-add-circle"><span class="nav-ico" data-icon="plus"></span></span>
+      <span>Добавить</span>
+    </button>
+    <button type="button" class="bottom-btn" id="bottomSearchBtn">
+      <span class="nav-ico" data-icon="search"></span>
+      <span>Поиск</span>
     </button>
     <button type="button" class="bottom-btn" id="bottomFiltersBtn">
       <span class="nav-ico" data-icon="sliders"></span>
       <span>Фильтры</span>
       <span class="filter-dot bottom-filter-dot hidden" id="mobileFilterDot"></span>
-    </button>
-    <button type="button" class="bottom-btn" id="bottomSearchBtn">
-      <span class="nav-ico" data-icon="search"></span>
-      <span>Поиск</span>
     </button>
   </nav>
 
@@ -365,6 +357,7 @@
         <div class="quick-add-hint">Бот автоматически найдёт постер, рейтинги IMDb/КП, описание и подберёт ИИ-теги.</div>
         <div id="quickAddStatus" class="quick-add-status hidden"></div>
         <div class="quick-add-actions">
+          <button type="button" class="confirm-cancel-btn quick-add-paste-btn" id="quickAddPasteBtn">📋 Вставить и добавить</button>
           <button type="button" class="confirm-cancel-btn" id="quickAddCancelBtn">Отмена</button>
           <button type="submit" class="auth-submit-btn" id="quickAddSubmitBtn">Добавить в базу</button>
         </div>
@@ -509,6 +502,6 @@
     <button type="button" id="undoToastBtn" class="undo-toast-btn">Отменить</button>
   </div>
 
-  <script src="./app.js?v=36"></script>
+  <script src="./app.js?v=37"></script>
 </body>
 </html>

@@ -372,6 +372,7 @@
     drawerAddHighlightMode: false,
     reenrichingItemId: null,
     zenReaderItemId: null,
+    mobileSearchOpen: false,
     statusPopoverItemId: null,
     ratingPopoverItemId: null,
     filtersSheetOpen: false,
@@ -645,30 +646,28 @@
   const authPasswordInput = document.getElementById("authPasswordInput");
   const authErrorMsg = document.getElementById("authErrorMsg");
   const authDescText = document.getElementById("authDescText");
-  const logoutBtns = [
-    document.getElementById("logoutBtnDesktop"),
-    document.getElementById("logoutBtnMobile"),
-  ].filter(Boolean);
+  async function performLogout() {
+    localStorage.removeItem("sb_access_key");
+    localStorage.removeItem("sb_cache_items_v1");
+    localStorage.removeItem("sb_cache_tags_v1");
+    try {
+      await fetch("/api/logout", { method: "POST" });
+    } catch {}
+    state.items = [];
+    state.originals = [];
+    closeDetailDrawer();
+    renderCatalog();
+    showAuthModal(false);
+  }
 
-  logoutBtns.forEach((btn) => {
+  const logoutBtnDesktop = document.getElementById("logoutBtnDesktop");
+  if (logoutBtnDesktop) {
     if (isTgWebApp) {
-      btn.classList.add("hidden");
+      logoutBtnDesktop.classList.add("hidden");
     } else {
-      btn.addEventListener("click", async () => {
-        localStorage.removeItem("sb_access_key");
-        localStorage.removeItem("sb_cache_items_v1");
-        localStorage.removeItem("sb_cache_tags_v1");
-        try {
-          await fetch("/api/logout", { method: "POST" });
-        } catch {}
-        state.items = [];
-        state.originals = [];
-        closeDetailDrawer();
-        renderCatalog();
-        showAuthModal(false);
-      });
+      logoutBtnDesktop.addEventListener("click", performLogout);
     }
-  });
+  }
 
   if (!isTgWebApp && !getAccessKey()) {
     setTimeout(() => {
@@ -3077,6 +3076,39 @@
     `;
   }
 
+  const SORT_LABELS = {
+    updated: "По обновлению",
+    imdb: "IMDb / Goodreads",
+    kp: "КП / FantLab",
+    rt: "Rotten Tomatoes",
+    user: "Моя оценка",
+    year: "Год выхода",
+    title: "А–Я",
+  };
+
+  function renderActiveFiltersBar() {
+    const bar = document.getElementById("activeFiltersBar");
+    if (!bar) return;
+    const chips = [];
+    if (state.view === "catalog") {
+      state.tags.forEach((t) => {
+        chips.push(
+          `<button type="button" class="af-chip" data-af-tag="${escapeHtml(t)}">#${escapeHtml(t)}<span class="af-x">×</span></button>`
+        );
+      });
+      if (state.sort && state.sort !== "created") {
+        chips.push(
+          `<button type="button" class="af-chip" data-af-sort>↕ ${escapeHtml(SORT_LABELS[state.sort] || state.sort)}<span class="af-x">×</span></button>`
+        );
+      }
+      if (chips.length > 1) {
+        chips.push(`<button type="button" class="af-chip af-reset" data-af-reset>Сбросить</button>`);
+      }
+    }
+    bar.innerHTML = chips.join("");
+    bar.classList.toggle("hidden", chips.length === 0);
+  }
+
   function renderFiltersSheet() {
     const categoryOpts = [
       { v: "", l: "Все" },
@@ -3124,9 +3156,26 @@
     if (hasTgAuto) {
       themeOpts.push({ v: "auto", l: "🌗 Авто (TG)", active: state.themeMode === "auto" });
     }
+    const viewOpts = [
+      { v: "catalog", l: "📚 Каталог" },
+      { v: "stats", l: "📊 Итоги" },
+      { v: "originals", l: "📥 Оригиналы" },
+    ];
     const sortedTags = [...state.allTags].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 
     filtersSheetBody.innerHTML = `
+      <div class="drawer-section">
+        <div class="drawer-section-title">Раздел</div>
+        <div class="sheet-pills-grid">
+          ${viewOpts
+            .map(
+              (vw) =>
+                `<button type="button" class="sheet-pill ${state.view === vw.v ? "active" : ""}" data-sheet-view="${vw.v}">${vw.l}</button>`
+            )
+            .join("")}
+        </div>
+      </div>
+
       <div class="drawer-section">
         <div class="drawer-section-title">Вид отображения</div>
         <div class="sheet-pills-grid">
@@ -3257,6 +3306,11 @@
       `
           : `<div class="drawer-section"><p style="font-size:13.5px;color:var(--muted);">Фильтры по категориям, статусу, тегам и сортировке доступны в разделе «Каталог».</p></div>`
       }
+      ${
+        !isTgWebApp
+          ? `<button type="button" class="confirm-cancel-btn" id="sheetLogoutBtn" style="width:100%;padding:10px;color:var(--danger);">Выйти из аккаунта</button>`
+          : ""
+      }
     `;
   }
 
@@ -3289,6 +3343,23 @@
   });
 
   filtersSheetBody.addEventListener("click", async (e) => {
+    const viewBtn = e.target.closest("[data-sheet-view]");
+    if (viewBtn) {
+      state.view = viewBtn.dataset.sheetView || "catalog";
+      syncStateToUrl({ push: true });
+      refreshCurrentView();
+      closeFiltersSheet();
+      window.scrollTo({ top: 0 });
+      haptic("selection");
+      return;
+    }
+
+    if (e.target.closest("#sheetLogoutBtn")) {
+      closeFiltersSheet();
+      performLogout();
+      return;
+    }
+
     if (e.target.closest("#sheetTmaFullscreenBtn")) {
       toggleTmaFullscreen();
       closeFiltersSheet();
@@ -4422,6 +4493,8 @@
         Boolean(state.smart));
     const filterDot = document.getElementById("mobileFilterDot");
     if (filterDot) filterDot.classList.toggle("hidden", !hasActiveFilter);
+    renderActiveFiltersBar();
+    syncMobileSearchVisibility();
   }
 
   function formatStatsMonthLabel(ym, full = false) {
@@ -5292,6 +5365,33 @@
     });
   }
 
+  const activeFiltersBarEl = document.getElementById("activeFiltersBar");
+  if (activeFiltersBarEl) {
+    activeFiltersBarEl.addEventListener("click", (e) => {
+      const tagBtn = e.target.closest("[data-af-tag]");
+      if (tagBtn) {
+        toggleTagFilter(tagBtn.dataset.afTag || "");
+        haptic("selection");
+        return;
+      }
+      const isReset = Boolean(e.target.closest("[data-af-reset]"));
+      const isSortClear = Boolean(e.target.closest("[data-af-sort]"));
+      if (isReset || isSortClear) {
+        if (isReset) state.tags = [];
+        state.sort = "created";
+        const deskSort = document.getElementById("sortSelect");
+        if (deskSort) deskSort.value = "created";
+        const mobSort = document.getElementById("mobileSortSelect");
+        if (mobSort) mobSort.value = "created";
+        syncNavigationState();
+        renderTagBar();
+        syncStateToUrl({ push: true });
+        loadItems();
+        haptic("selection");
+      }
+    });
+  }
+
   const shortcutsHelpBtnDesktop = document.getElementById("shortcutsHelpBtnDesktop");
   if (shortcutsHelpBtnDesktop) {
     shortcutsHelpBtnDesktop.addEventListener("click", () => openShortcutsModal());
@@ -5312,13 +5412,21 @@
       return;
     }
     if (e.target.closest("#bottomSearchBtn")) {
+      const inp = document.getElementById("searchInput");
+      if (Date.now() - lastSearchBlurAt < 350 && inp && !inp.value.trim()) {
+        return;
+      }
       if (state.view === "stats") {
         state.view = "catalog";
         syncStateToUrl({ push: true });
         refreshCurrentView();
       }
-      window.scrollTo({ top: 0, behavior: "smooth" });
-      setTimeout(() => document.getElementById("searchInput").focus(), 180);
+      state.mobileSearchOpen = true;
+      const tb = document.getElementById("topbar");
+      if (tb) tb.classList.remove("topbar-hidden");
+      syncMobileSearchVisibility();
+      if (inp) inp.focus({ preventScroll: true });
+      haptic("selection");
     }
   });
 
@@ -5386,11 +5494,29 @@
   const searchClearBtn = document.getElementById("searchClearBtn");
   const searchWrapEl = searchInput ? searchInput.closest(".search-wrap") : null;
   let searchTimer = null;
+  let lastSearchBlurAt = 0;
+
+  function syncMobileSearchVisibility() {
+    const tb = document.getElementById("topbar");
+    const inp = document.getElementById("searchInput");
+    if (tb) {
+      tb.classList.toggle("mobile-search-open", Boolean(state.mobileSearchOpen || state.q || (inp && inp.value)));
+    }
+  }
 
   function syncSearchQueryState(val) {
     if (searchClearBtn) searchClearBtn.classList.toggle("hidden", !val);
     if (searchWrapEl) searchWrapEl.classList.toggle("has-query", Boolean(val));
+    syncMobileSearchVisibility();
   }
+
+  searchInput.addEventListener("blur", () => {
+    lastSearchBlurAt = Date.now();
+    if (window.innerWidth <= 820 && !searchInput.value.trim()) {
+      state.mobileSearchOpen = false;
+      syncMobileSearchVisibility();
+    }
+  });
 
   searchInput.addEventListener("input", (e) => {
     const val = e.target.value;
@@ -5408,9 +5534,10 @@
   });
 
   searchClearBtn.addEventListener("click", () => {
+    if (window.innerWidth <= 820) state.mobileSearchOpen = true;
     searchInput.value = "";
-    syncSearchQueryState("");
     state.q = "";
+    syncSearchQueryState("");
     syncStateToUrl({ push: false });
     if (state.view === "originals") {
       loadOriginals();
@@ -5422,7 +5549,6 @@
 
   document.getElementById("themeToggleDesktop").addEventListener("click", cycleThemeMode);
   document.getElementById("refreshBtnDesktop").addEventListener("click", refreshCurrentView);
-  document.getElementById("refreshBtnMobile").addEventListener("click", refreshCurrentView);
 
   const statusPillsBarEl = document.getElementById("statusPillsBar");
   if (statusPillsBarEl) {
@@ -5584,6 +5710,34 @@
   }
   if (document.getElementById("quickAddCancelBtn")) {
     document.getElementById("quickAddCancelBtn").addEventListener("click", closeQuickAddModal);
+  }
+  const quickAddPasteBtn = document.getElementById("quickAddPasteBtn");
+  if (quickAddPasteBtn) {
+    quickAddPasteBtn.addEventListener("click", async () => {
+      let text = "";
+      try {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          text = (await navigator.clipboard.readText()) || "";
+        }
+      } catch {}
+      text = text.trim();
+      if (!text) {
+        if (quickAddStatus) {
+          quickAddStatus.textContent = "Буфер недоступен — вставьте вручную долгим нажатием в поле.";
+          quickAddStatus.classList.remove("hidden");
+          quickAddStatus.classList.add("error");
+        }
+        if (quickAddInput) quickAddInput.focus();
+        return;
+      }
+      if (quickAddInput) quickAddInput.value = text;
+      haptic("light");
+      if (quickAddForm && typeof quickAddForm.requestSubmit === "function") {
+        quickAddForm.requestSubmit();
+      } else if (quickAddSubmitBtn) {
+        quickAddSubmitBtn.click();
+      }
+    });
   }
   if (quickAddOverlay) {
     quickAddOverlay.addEventListener("click", (e) => {

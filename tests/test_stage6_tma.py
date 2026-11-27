@@ -944,10 +944,10 @@ class TestStage6TMA(unittest.TestCase):
         css = (tma_dir / "styles.css").read_text(encoding="utf-8")
         js = (tma_dir / "app.js").read_text(encoding="utf-8")
 
-        # 1. Версия ассетов v36, PWA-манифест + иконки + Service Worker, Literata
-        self.assertIn("./styles.css?v=36", html)
-        self.assertIn("./app.js?v=36", html)
-        self.assertIn("./manifest.webmanifest?v=36", html)
+        # 1. Версия ассетов v37, PWA-манифест + иконки + Service Worker, Literata
+        self.assertIn("./styles.css?v=37", html)
+        self.assertIn("./app.js?v=37", html)
+        self.assertIn("./manifest.webmanifest?v=37", html)
         self.assertEqual(mimetypes.guess_type("manifest.webmanifest")[0], "application/manifest+json")
         self.assertIn("Literata", html)
         self.assertIn('data-mode="posters"', html)
@@ -957,7 +957,7 @@ class TestStage6TMA(unittest.TestCase):
 
         for fname in ("manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png"):
             self.assertTrue((tma_dir / fname).is_file(), f"Missing PWA asset: {fname}")
-        self.assertIn("notes-shell-v36", (tma_dir / "sw.js").read_text(encoding="utf-8"))
+        self.assertIn("notes-shell-v37", (tma_dir / "sw.js").read_text(encoding="utf-8"))
         self.assertTrue((tma_dir / "icon-192.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertTrue((tma_dir / "icon-512.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
         manifest = json.loads((tma_dir / "manifest.webmanifest").read_text(encoding="utf-8"))
@@ -998,6 +998,9 @@ class TestStage6TMA(unittest.TestCase):
             'id="zenFontIncBtn"',
             'id="zenWidthToggleBtn"',
             'id="zenManualQuoteBtn"',
+            'id="activeFiltersBar"',
+            'id="quickAddPasteBtn"',
+            'bottom-add-btn',
         ):
             self.assertIn(token, html)
 
@@ -1060,6 +1063,9 @@ class TestStage6TMA(unittest.TestCase):
             "drawer-bottom-stack",
             "drawer-note-card",
             "drawer-summary.is-clamped",
+            "mobile-search-open",
+            "af-chip",
+            "bottom-add-circle",
         ):
             self.assertIn(token, css)
 
@@ -1136,6 +1142,11 @@ class TestStage6TMA(unittest.TestCase):
             "drawerNoteClampExpanded",
             "drawerSummaryExpanded",
             "drawerNoteExpanded",
+            "renderActiveFiltersBar",
+            "syncMobileSearchVisibility",
+            "performLogout",
+            "data-sheet-view",
+            "quickAddPasteBtn",
         ):
             self.assertIn(token, js)
 
